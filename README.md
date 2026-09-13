@@ -9,7 +9,12 @@ heraus steuern — ganz ohne den ESP32 dafür neu zu flashen.
 
 Dieses Board hat **keine Audioausgabe**, der Wecker weckt daher rein visuell: ein
 großes, blinkendes rotes "ALARM"-Label plus zwei große Touchflächen zum Stoppen bzw.
-9 Minuten Schlummern.
+9 Minuten Schlummern. Da das Display keinen nativen Audioanschluss besitzt, ist das
+hilfsweise so gelöst, um das Alarmereignis zu visualisieren. Im weiteren Ausbau wird
+die Hardware um eine Audioausgabe ergänzt und das Projekt dann entsprechend angepasst.
+
+**Hinweis:** Dies stellt keine voll funktionsfähige, rocksolide Version dar, sondern
+ein Proof of Concept — also eher Work in Progress.
 
 ## Fotos
 
