@@ -143,8 +143,11 @@ Ein stufenweiser Verlauf aller 26 Entwicklungsschritte steht in
 ## Dateien in diesem Projekt
 
 - `smart-wecker-waveshare.yaml` — finale, zuletzt bestätigte Haupt-ESPHome-Konfiguration
-- `smart-wecker-waveshare-01.yaml` … `-26.yaml` — nummerierte Zwischenstufen der
-  Entwicklung (Bisektion + spätere Feature-Iterationen), siehe [CHANGELOG.md](CHANGELOG.md)
+- `smart-wecker-waveshare-24.yaml`, `-26.yaml` — die beiden letzten, noch nicht final
+  bestätigten Zwischenstufen (siehe [CHANGELOG.md](CHANGELOG.md) für den vollständigen
+  Verlauf aller 26 Stufen; die Zwischendateien 01–23 und 25 wurden nach Abschluss der
+  jeweiligen Schritte wieder entfernt, ihr Inhalt ist im CHANGELOG zusammengefasst und
+  in der Git-Historie enthalten)
 - `Waveshare_Swirch.yaml` — vom Nutzer beigesteuerte, verifizierte Hardware-Referenz
   ("ESPHome Designer"-Export)
 - `BILDER/` — Fotos des laufenden Geräts

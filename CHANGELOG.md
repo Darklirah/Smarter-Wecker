@@ -55,3 +55,10 @@ Stand (Stufe 23). Die Stufen 24–26 (HA-Zeitquelle, MQTT-Temperaturanzeige,
 Links-Ausrichtung) sind bereits gebaut, aber am Gerät noch nicht abschließend
 bestätigt — nach erfolgreichem Test werden sie ebenfalls in die Hauptdatei
 übernommen.
+
+Die Zwischendateien der Stufen 01–23 und 25 wurden aus dem Repo entfernt, um es
+übersichtlich zu halten, nachdem ihr Inhalt hier zusammengefasst und in
+[Docs/ESPHome-Lessons-Learned.md](Docs/ESPHome-Lessons-Learned.md) dokumentiert
+wurde (vollständig weiterhin in der Git-Historie enthalten). Stufe 24 und 26
+liegen noch als Dateien vor, da sie den aktuell wartenden, noch zu bestätigenden
+Stand markieren.
