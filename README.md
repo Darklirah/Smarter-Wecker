@@ -90,8 +90,11 @@ MQTT-Passwort: "dein-mqtt-passwort"
 ### 2. Kompilieren & Flashen
 
 Über die ESPHome-Oberfläche (z.B. das ESPHome-Add-on in Home Assistant, oder die
-`esphome`-CLI): `smart-wecker-waveshare.yaml` auswählen, kompilieren, per USB oder OTA
-flashen.
+`esphome`-CLI): `smart-wecker-waveshare-26.yaml` auswählen (aktuellster Stand, inkl.
+Temperaturanzeige — siehe [Unterschied zu -24 unten](#dateien-in-diesem-projekt)),
+kompilieren, per USB oder OTA flashen. Falls dabei Probleme auftreten, ist
+`smart-wecker-waveshare-24.yaml` der zuletzt vollständig bestätigte, stabile
+Stand ohne Temperaturanzeige.
 
 ### 3. Gerät in Home Assistant hinzufügen
 
@@ -149,14 +152,18 @@ Ein stufenweiser Verlauf aller 26 Entwicklungsschritte steht in
 
 ## Dateien in diesem Projekt
 
-- `smart-wecker-waveshare.yaml` — finale, zuletzt bestätigte Haupt-ESPHome-Konfiguration
-- `smart-wecker-waveshare-24.yaml`, `-26.yaml` — die beiden letzten, noch nicht final
-  bestätigten Zwischenstufen (siehe [CHANGELOG.md](CHANGELOG.md) für den vollständigen
-  Verlauf aller 26 Stufen; die Zwischendateien 01–23 und 25 wurden nach Abschluss der
-  jeweiligen Schritte wieder entfernt, ihr Inhalt ist im CHANGELOG zusammengefasst und
-  in der Git-Historie enthalten)
-- `Waveshare_Swirch.yaml` — vom Nutzer beigesteuerte, verifizierte Hardware-Referenz
-  ("ESPHome Designer"-Export)
+- `smart-wecker-waveshare-24.yaml` — zuletzt **vollständig bestätigter, stabiler**
+  Stand: Zeitsynchronisation primär über Home Assistant (NTP als Fallback), aber
+  noch **ohne** Temperaturanzeige.
+- `smart-wecker-waveshare-26.yaml` — baut auf `-24.yaml` auf und ergänzt die
+  Außen-/Zimmertemperatur-Zeile (per MQTT, Quelle frei aus Home Assistant wählbar,
+  siehe [Temperaturanzeige einrichten](#4-home-assistant-helfer-für-die-temperaturanzeige-anlegen)),
+  links ausgerichtet, mit einem Schalter zum Ausblenden bei fehlendem Wert. Dies
+  ist der aktuell fortgeschrittenste Stand, aber am Gerät noch nicht abschließend
+  bestätigt (siehe oben, "Kompilieren & Flashen").
+  Die Zwischendateien der Stufen 01–23 und 25 wurden nach Abschluss der jeweiligen
+  Schritte wieder entfernt, um das Repo übersichtlich zu halten — ihr Inhalt ist im
+  [CHANGELOG.md](CHANGELOG.md) zusammengefasst und in der Git-Historie enthalten.
 - `BILDER/` — Fotos des laufenden Geräts
 - `Docs/hardware-specs.md` — recherchierte Hardware-Spezifikationen mit Quellen
 - `Docs/quellen.md` — Liste aller verwendeten Quellen
