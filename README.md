@@ -1,5 +1,7 @@
 # Smart-Wecker – Waveshare-Variante
 
+> Dieses Projekt wurde mit Unterstützung von [Claude Code](https://claude.com/claude-code) entwickelt.
+
 Ein smarter Wecker auf Basis eines ESP32-S3-Touch-Displays, gebaut mit
 [ESPHome](https://esphome.io/) und in [Home Assistant](https://www.home-assistant.io/)
 integriert. Uhrzeit, Datum, eine frei einstellbare Weckzeit mit Wochentagen und eine
