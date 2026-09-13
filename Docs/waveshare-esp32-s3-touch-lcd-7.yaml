@@ -1,0 +1,149 @@
+esphome:
+  min_version: "2025.8.0"
+  platformio_options:
+    board_upload.maximum_ram_size: 524288
+
+psram:
+  mode: octal
+  speed: 120MHz
+
+esp32:
+  variant: esp32s3
+  flash_size: 8MB
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
+
+i2c:
+  sda: GPIO08
+  scl: GPIO09
+  scan: True
+  id: bus_a
+
+ch422g:
+  - id: ch422g_hub
+
+output:
+  - platform: gpio
+    id: lcdbacklight_output
+    pin:
+      ch422g: ch422g_hub
+      number: 2
+      mode:
+        output: true
+      inverted: false
+
+light:
+  - platform: binary
+    output: lcdbacklight_output
+    id: lcdbacklight
+    name: LCD Backlight
+    icon: mdi:wall-sconce-flat-outline
+    disabled_by_default: true
+    restore_mode: ALWAYS_ON
+    on_turn_off:
+      - script.execute: start_antiburn
+    on_turn_on:
+      - script.execute: stop_antiburn
+
+script:
+  - id: start_antiburn
+    then:
+      - delay: 5min
+      - logger.log: Starting automatic antiburn.
+      - switch.turn_on: switch_antiburn
+  - id: stop_antiburn
+    then:
+      - script.stop: start_antiburn
+      - switch.turn_off: switch_antiburn
+
+switch:
+  - platform: template
+    name: Antiburn
+    id: switch_antiburn
+    icon: mdi:television-shimmer
+    optimistic: true
+    entity_category: "config"
+    disabled_by_default: true
+    turn_on_action:
+      - logger.log: "Starting Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "Stopping Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+
+lvgl:
+
+### Display
+display:
+  - platform: mipi_rgb
+    model: ESP32-S3-TOUCH-LCD-7-800X480
+    id: waveshare_display
+    update_interval: never
+    auto_clear_enabled: false
+    color_order: RGB
+    pclk_frequency: 16MHZ
+    dimensions:
+      width: 800
+      height: 480
+    de_pin:
+      number: 5
+    hsync_pin:
+      number: 46
+      ignore_strapping_warning: true
+    vsync_pin:
+      number: 3
+      ignore_strapping_warning: true
+    pclk_pin: 7
+    pclk_inverted: true
+    reset_pin:
+      ch422g: ch422g_hub
+      number: 3
+    hsync_back_porch: 8
+    hsync_front_porch: 8
+    hsync_pulse_width: 4
+    vsync_back_porch: 16
+    vsync_front_porch: 16
+    vsync_pulse_width: 4
+    data_pins:
+      red:
+        - 1         #r3
+        - 2         #r4
+        - 42        #r5
+        - 41        #r6
+        - 40        #r7
+      blue:
+        - 14        #b3
+        - 38        #b4
+        - 18        #b5
+        - 17        #b6
+        - 10        #b7
+      green:
+        - 39        #g2
+        - 0         #g3
+        - 45        #g4
+        - 48        #g5
+        - 47        #g6
+        - 21        #g7
+
+### Touchscreen
+touchscreen:
+  platform: gt911
+  id: waveshare_touch
+  interrupt_pin: GPIO4
+  reset_pin:
+    ch422g: ch422g_hub
+    number: 1
+    mode: OUTPUT

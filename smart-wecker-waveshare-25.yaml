@@ -1,0 +1,1243 @@
+# Smart-Wecker (Waveshare-Variante) – ESPHome-Hauptkonfiguration
+# Board: Waveshare ESP32-S3-Touch-LCD-7 (Basisversion, CH422G-IO-Expander)
+# Details/Quellen: siehe Docs/hardware-specs.md und Docs/quellen.md
+#
+# Unterschiede zur CrowPanel-Variante (../Smart-Wecker/):
+#   - KEINE Audioausgabe (dieses Board hat keinen Onboard-Verstaerker/Lautsprecheranschluss
+#     und keine sicher verlötbaren freien GPIOs dafuer -- siehe Docs/hardware-specs.md)
+#   - KEIN physischer Taster (kein sicher nutzbarer freier GPIO dafuer) -- stattdessen eine
+#     GROSSE Touchflaeche auf dem Alarm-Bildschirm zum Stoppen/Snoozen
+#   - Backlight ist hier nur Ein/Aus (kein PWM/Dimmen) -- Hardware-/Paket-Eigenschaft dieses
+#     Boards, siehe Docs/hardware-specs.md
+#
+# HINWEIS ZUR HARDWARE-KONFIGURATION (16.09.2026):
+# Das anfangs genutzte Community-Paket (inytar/waveshare-esp32-s3-touch-lcd-7-esphome) hat
+# auf diesem konkreten Geraet zu Boot-Abstuerzen gefuehrt (PSRAM-Timing UND ein
+# I2C-"Bus Recovery"-Crash). Der Nutzer hat eine selbst getestete, nachweislich
+# funktionierende Hardware-Config (Waveshare_Swirch.yaml, per "ESPHome Designer" erzeugt)
+# beigesteuert -- die Hardware-Sektion unten ist 1:1 von dort uebernommen (u.a.
+# flash_size: 16MB statt 8MB, KEIN execute_from_psram/experimental_features, andere
+# Sync-Porch-Werte, display update_interval: 1s statt never).
+#
+# HINWEIS ZUR WECK-LOGIK (16.09.2026, nach ausfuehrlicher Fehlersuche, siehe
+# ../ESPHome-Lessons-Learned.md): Eine 13-stufige Bisektion (smart-wecker-waveshare-01.yaml
+# bis -13.yaml) hat gezeigt, dass JEDE direkte Rueckkopplung "Entity aendert sich -> LVGL-
+# Widget wird per on_value/on_boot automatisch aktualisiert" (z.B. number.on_value ->
+# lvgl.roller.update, oder restore_mode, das ein LVGL-Widget beim Booten setzt) zu
+# Abstuerzen fuehrt -- entweder sofort beim Booten (LVGL existiert noch nicht) oder
+# verzoegert im laufenden Betrieb (Rueckkopplungsschleife). Deshalb hier bewusst OHNE
+# `switch: platform: lvgl` (das intern denselben restore-at-boot-Mechanismus nutzen
+# wuerde) und OHNE `number.on_value`/`switch.on_state` mit lvgl.*.update. Stattdessen:
+# alle Entities sind reine Wertespeicher, und der jeweilige Wert wird NUR beim
+# tatsaechlichen Oeffnen der Einstellungsseite ("Einst."-Button) einmalig in die Widgets
+# gezogen ("pull"). Die Gegenrichtung (Widget-Interaktion -> Entity setzen, z.B.
+# roller.on_value -> number.set) ist unveraendert die ganze Zeit unproblematisch gewesen
+# und bleibt bestehen.
+#
+# HINWEIS ZUR PERSISTENZ (16.09.2026): Die Weckzeit wurde nach jedem Neustart auf 00:00
+# zurueckgesetzt. NICHT die Ursache war esphome.on_boot's Standard-Prioritaet (600, wie
+# zunaechst vermutet und mit priority:-100 "gefixt" -- blieb wirkungslos). Die ECHTE
+# Ursache: ESPHome schreibt restore_value-Aenderungen erst nach `flash_write_interval`
+# (Standard 1 Minute!) auf den Flash -- ein Neustart kurz nach dem Aendern verlor die
+# Aenderung also immer. Fix: `preferences: flash_write_interval: 0s` weiter unten.
+#
+# STAND (16.09.2026, Stufe 23, vom Nutzer am Geraet bestaetigt funktionierend):
+#   - Uhrzeit (1,5x groesser) + Datum, blinkendes "Synchronisiere Zeit" bis zum ersten
+#     NTP-Sync, NTP-Status-Punkt, Statuszeile unten ("Wecker: HH:MM - Wochentage")
+#   - Einstellungsseite: Stunden-Roller + zwei Minuten-Ziffern-Roller (Zehner/Einer,
+#     jede Minute 0-59 waehlbar, alle drei Roller mit Endlos-Scroll/mode:INFINITE und
+#     groesserer Schrift), Hauptschalter mit dynamischem "Wecker aktiv/inaktiv"-Label
+#     (gruen/grau), 7 Wochentag-Checkboxen (grau=aus, gruen=an)
+#   - "OK"-Taste quittiert mit kurzem Aufblitzen der eingestellten Zeit, "Zurück"-Taste
+#     -- beide kehren zur Uhr zurueck
+#   - Native Home-Assistant-Entitaet "Weckzeit" (datetime/time) fuer komfortable
+#     Fernbedienung, bidirektional mit den (in HA verborgenen, internal:true) Rollern
+#     synchron gehalten; alarm_hour/alarm_minute + alle Wochentage + die Weckzeit-
+#     Entitaet selbst sind persistent (ueberleben Neustarts, sofort geschrieben)
+#   - Alarm: rein visuell (kein Ton auf diesem Board) -- Hintergrund UND ein grosses
+#     rotes "ALARM"-Label blinken abwechselnd; SNOOZE (9 Min) und STOP als grosse,
+#     bewusst nicht zu grosse Touchflaechen (260x260), damit "ALARM" nicht ueberlappt
+#   - Schrift: glyphsets: GF_Latin_Core (statt Standard GF_Latin_Kernel) fuer deutsche
+#     Umlaute/ß -- WICHTIG: ein rohes `glyphs: "äöü..."` ohne glyphsets hat sich als
+#     fehlerhaft erwiesen (kompletter Basis-Zeichensatz fiel weg, nur leere Kaestchen)
+
+# STUFE 24: Zeit wird beim Start ZUERST von Home Assistant abgefragt (ueber die bereits
+# bestehende native API-Verbindung), NTP bleibt als unabhaengige zweite Zeitquelle/
+# Fallback bestehen.
+#
+# STUFE 25 (baut darauf auf): Kosmetik -- oberste Zeile zeigt Aussen-/Zimmertemperatur.
+# Die Werte kommen per MQTT (Topics "smartwecker/aussentemperatur" /
+# ".../zimmertemperatur"), veroeffentlicht von einer HA-Automatisierung, die den in
+# zwei input_text-Helfern ("Wecker Aussentemperatur-Quelle" / "...Zimmertemperatur-
+# Quelle") frei eingetragenen Entity-Namen jede Minute (und sofort bei Aenderung des
+# Helfers) ausliest und per mqtt.publish (retained) weiterreicht -- Quelle also komplett
+# aus Home Assistant heraus wählbar, ohne den ESP32 neu zu flashen.
+# Ein Schalter in HA ("Wecker Temperaturzeile ausblenden falls leer") steuert, ob bei
+# fehlendem Wert "n/v" angezeigt oder die ganze Zeile ausgeblendet wird.
+
+esphome:
+  name: smart-wecker-waveshare-25
+  friendly_name: Smart-Wecker Waveshare Test 25
+  platformio_options:
+    board_upload.maximum_ram_size: 524288
+  on_boot:
+    # priority: -100 -- laesst diesen Block garantiert erst NACH der Wiederherstellung
+    # aller anderen Komponenten laufen (siehe ESPHome-Lessons-Learned.md). War am Ende
+    # nicht die Ursache des 00:00-Reset-Bugs (das war flash_write_interval, siehe unten),
+    # bleibt aber als korrekte Praxis bestehen.
+    priority: -100
+    then:
+      - datetime.time.set:
+          id: alarm_time_ha
+          time: !lambda |-
+            return {.second = 0, .minute = (int) id(alarm_minute).state,
+                .hour = (int) id(alarm_hour).state};
+      - script.execute: update_temp_label_script
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    advanced:
+      loop_task_stack_size: 24576
+    # KEIN execute_from_psram, KEIN enable_idf_experimental_features -- in der verifizierten
+    # Referenz-Config bewusst deaktiviert/nicht gesetzt.
+
+psram:
+  mode: octal
+  speed: 80Mhz
+
+# flash_write_interval: 0s -- schreibt Aenderungen an persistenten Werten (Weckzeit,
+# Wochentage, ...) SOFORT statt (Standard) bis zu 1 Minute zu sammeln. Fuer selten
+# geaenderte Werte wie eine Weckzeit ist der zusaetzliche Flash-Verschleiss
+# vernachlaessigbar; ohne dies ging ein kurz vor einem Neustart geaenderter Wert
+# zuverlaessig verloren.
+preferences:
+  flash_write_interval: 0s
+
+logger:
+
+ota:
+  - platform: esphome
+    password: !secret OTA_Secret
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Waveshare-Test-25 Fallback"
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+captive_portal:
+
+# Aussen-/Zimmertemperatur kommen per MQTT von Home Assistant (siehe Stufe-25-Hinweis
+# oben) -- Broker ist derselbe, den auch Zigbee2MQTT im Netz bereits nutzt.
+mqtt:
+  broker: !secret MQTT-Broker
+  port: 1883
+  username: !secret MQTT-user
+  password: !secret MQTT-Passwort
+  # discovery: false -- wir nutzen mqtt: hier NUR zum Abonnieren der beiden
+  # Temperatur-Topics. Die native API (api:) ist bereits der Weg, wie dieses Geraet in
+  # HA eingebunden ist; ohne dies wuerde MQTT-Discovery ein zweites, redundantes
+  # Geraet/Entity-Set in HA anlegen.
+  discovery: false
+
+sensor:
+  - platform: mqtt_subscribe
+    name: "Außentemperatur (MQTT)"
+    id: outside_temp_mqtt
+    topic: "smartwecker/aussentemperatur"
+    internal: true
+    on_value:
+      then:
+        - script.execute: update_temp_label_script
+  - platform: mqtt_subscribe
+    name: "Zimmertemperatur (MQTT)"
+    id: room_temp_mqtt
+    topic: "smartwecker/zimmertemperatur"
+    internal: true
+    on_value:
+      then:
+        - script.execute: update_temp_label_script
+
+# ---------------------------------------------------------------------------
+# DISPLAY, TOUCH, BACKLIGHT -- 1:1 aus der verifizierten Waveshare_Swirch.yaml uebernommen
+# (siehe Hinweis oben). NICHT ohne erneuten Hardware-Test veraendern.
+# ---------------------------------------------------------------------------
+
+i2c:
+  - id: bus_a
+    sda: GPIO8
+    scl: GPIO9
+    scan: true
+
+ch422g:
+  - id: ch422g_hub
+
+touchscreen:
+  platform: gt911
+  id: waveshare_touch
+  i2c_id: bus_a
+  interrupt_pin: GPIO4
+  reset_pin:
+    ch422g: ch422g_hub
+    number: 1
+    mode: OUTPUT
+  transform:
+    swap_xy: false
+    mirror_x: false
+    mirror_y: false
+
+display:
+  - platform: mipi_rgb
+    model: ESP32-S3-TOUCH-LCD-7-800X480
+    id: waveshare_display
+    rotation: 0
+    update_interval: 1s
+    auto_clear_enabled: false
+    color_order: RGB
+    pclk_frequency: 16MHZ
+    dimensions:
+      width: 800
+      height: 480
+    reset_pin:
+      ch422g: ch422g_hub
+      number: 3
+    de_pin:
+      number: GPIO5
+    hsync_pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    vsync_pin:
+      number: GPIO3
+      ignore_strapping_warning: true
+    pclk_pin: GPIO7
+    pclk_inverted: true
+    hsync_back_porch: 8
+    hsync_front_porch: 8
+    hsync_pulse_width: 4
+    vsync_back_porch: 8
+    vsync_front_porch: 8
+    vsync_pulse_width: 4
+    data_pins:
+      red: [1, 2, 42, 41, 40]
+      blue: [14, 38, 18, 17, 10]
+      green: [39, 0, 45, 48, 47, 21]
+
+output:
+  - platform: gpio
+    id: lcdbacklight_output
+    pin:
+      ch422g: ch422g_hub
+      number: 2
+      mode:
+        output: true
+      inverted: false
+
+light:
+  - platform: binary
+    output: lcdbacklight_output
+    id: lcdbacklight
+    name: "LCD Backlight"
+    restore_mode: ALWAYS_ON
+
+interval:
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: "return !id(time_synced);"
+          then:
+            - lambda: "id(sync_blink_state) = !id(sync_blink_state);"
+            - if:
+                condition:
+                  lambda: "return id(sync_blink_state);"
+                then:
+                  - lvgl.widget.show: sync_status_label
+                else:
+                  - lvgl.widget.hide: sync_status_label
+
+time:
+  # Primaer: Zeit von Home Assistant ueber die bereits bestehende native API-Verbindung
+  # -- normalerweise sehr schnell nach dem Verbindungsaufbau verfuegbar, kein Umweg
+  # ueber externe NTP-Server noetig.
+  - platform: homeassistant
+    id: current_time
+    timezone: Europe/Berlin
+    on_time_sync:
+      then:
+        - lambda: "id(time_synced) = true;"
+        - lvgl.widget.hide: sync_status_label
+        - lvgl.widget.update:
+            id: ntp_status_dot
+            bg_color: 0x4CAF50
+        - script.execute: clock_update_script
+    on_time:
+      - seconds: 0
+        then:
+          - script.execute: clock_update_script
+          - script.execute: alarm_check_script
+
+  # Fallback: klassisches NTP, falls Home Assistant/die API-Verbindung mal nicht
+  # erreichbar ist (z.B. HA startet gerade neu). Unabhaengige zweite Zeitquelle --
+  # beide aktualisieren dieselbe Systemuhr, welche zuerst synchronisiert "gewinnt".
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+    on_time_sync:
+      then:
+        - lambda: "id(time_synced) = true;"
+        - lvgl.widget.hide: sync_status_label
+        - lvgl.widget.update:
+            id: ntp_status_dot
+            bg_color: 0x4CAF50
+        - script.execute: clock_update_script
+
+script:
+  - id: clock_update_script
+    then:
+      - lvgl.label.update:
+          id: clock_time_label
+          text: !lambda |-
+            auto now = id(current_time).now();
+            static char buf[6];
+            snprintf(buf, sizeof(buf), "%02d:%02d", now.hour, now.minute);
+            return buf;
+      - lvgl.label.update:
+          id: clock_date_label
+          text: !lambda |-
+            auto now = id(current_time).now();
+            if (!now.is_valid()) return "";
+            static const char * const day_names[] = {"Sonntag", "Montag", "Dienstag",
+                "Mittwoch", "Donnerstag", "Freitag", "Samstag"};
+            static const char * const month_names[] = {"Januar", "Februar", "März", "April",
+                "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"};
+            static char buf[40];
+            snprintf(buf, sizeof(buf), "%s, %d. %s", day_names[now.day_of_week - 1],
+                now.day_of_month, month_names[now.month - 1]);
+            return buf;
+      - lvgl.label.update:
+          id: alarm_summary_label
+          text: !lambda |-
+            static char buf[64];
+            if (!id(alarm_master_switch).state) {
+              snprintf(buf, sizeof(buf), "Wecker: aus");
+              return buf;
+            }
+            char days[32] = "";
+            if (id(alarm_mon).state) strcat(days, "Mo ");
+            if (id(alarm_tue).state) strcat(days, "Di ");
+            if (id(alarm_wed).state) strcat(days, "Mi ");
+            if (id(alarm_thu).state) strcat(days, "Do ");
+            if (id(alarm_fri).state) strcat(days, "Fr ");
+            if (id(alarm_sat).state) strcat(days, "Sa ");
+            if (id(alarm_sun).state) strcat(days, "So ");
+            if (strlen(days) == 0) {
+              snprintf(buf, sizeof(buf), "Wecker: %02d:%02d (kein Tag aktiv)",
+                  (int) id(alarm_hour).state, (int) id(alarm_minute).state);
+            } else {
+              snprintf(buf, sizeof(buf), "Wecker: %02d:%02d - %s",
+                  (int) id(alarm_hour).state, (int) id(alarm_minute).state, days);
+            }
+            return buf;
+
+  # Berechnet den Text der obersten Zeile ("Außen: X°C   Zimmer: Y°C") aus den beiden
+  # MQTT-Sensoren. Fehlt ein Wert: je nach temp_hide_switch entweder "n/v" oder die
+  # jeweilige Haelfte komplett weglassen. Fehlen BEIDE und ist der Schalter an: Zeile
+  # komplett ausblenden (lvgl.widget.hide) statt nur leeren Text zu zeigen.
+  - id: update_temp_label_script
+    then:
+      - lvgl.label.update:
+          id: outside_room_temp_label
+          text: !lambda |-
+            bool have_outside = id(outside_temp_mqtt).has_state();
+            bool have_room = id(room_temp_mqtt).has_state();
+            bool hide_missing = id(temp_hide_switch).state;
+            char outside_part[24] = "";
+            char room_part[24] = "";
+            if (have_outside) {
+              snprintf(outside_part, sizeof(outside_part), "Außen: %.1f°C", id(outside_temp_mqtt).state);
+            } else if (!hide_missing) {
+              snprintf(outside_part, sizeof(outside_part), "Außen: n/v");
+            }
+            if (have_room) {
+              snprintf(room_part, sizeof(room_part), "Zimmer: %.1f°C", id(room_temp_mqtt).state);
+            } else if (!hide_missing) {
+              snprintf(room_part, sizeof(room_part), "Zimmer: n/v");
+            }
+            static char buf[64];
+            if (strlen(outside_part) == 0 && strlen(room_part) == 0) {
+              buf[0] = '\0';
+            } else if (strlen(outside_part) == 0) {
+              snprintf(buf, sizeof(buf), "%s", room_part);
+            } else if (strlen(room_part) == 0) {
+              snprintf(buf, sizeof(buf), "%s", outside_part);
+            } else {
+              snprintf(buf, sizeof(buf), "%s     %s", outside_part, room_part);
+            }
+            return buf;
+      - if:
+          condition:
+            lambda: |-
+              bool have_outside = id(outside_temp_mqtt).has_state();
+              bool have_room = id(room_temp_mqtt).has_state();
+              return (!have_outside && !have_room && id(temp_hide_switch).state);
+          then:
+            - lvgl.widget.hide: outside_room_temp_label
+          else:
+            - lvgl.widget.show: outside_room_temp_label
+
+  - id: update_master_switch_label_script
+    then:
+      - if:
+          condition:
+            lambda: "return id(alarm_master_switch).state;"
+          then:
+            - lvgl.label.update:
+                id: master_switch_label
+                text: "Wecker aktiv"
+                text_color: 0x4CAF50
+          else:
+            - lvgl.label.update:
+                id: master_switch_label
+                text: "Wecker inaktiv"
+                text_color: 0x888888
+
+  - id: alarm_check_script
+    then:
+      - lambda: |-
+          if (!id(alarm_master_switch).state) return;
+          auto t = id(current_time).now();
+          if (!t.is_valid()) return;
+
+          bool tag_aktiv = false;
+          switch (t.day_of_week) {
+            case 1: tag_aktiv = id(alarm_sun).state; break;
+            case 2: tag_aktiv = id(alarm_mon).state; break;
+            case 3: tag_aktiv = id(alarm_tue).state; break;
+            case 4: tag_aktiv = id(alarm_wed).state; break;
+            case 5: tag_aktiv = id(alarm_thu).state; break;
+            case 6: tag_aktiv = id(alarm_fri).state; break;
+            case 7: tag_aktiv = id(alarm_sat).state; break;
+          }
+
+          if (tag_aktiv && t.hour == (int) id(alarm_hour).state && t.minute == (int) id(alarm_minute).state) {
+            id(alarm_ring_script).execute();
+          }
+
+  - id: alarm_ring_script
+    mode: restart
+    then:
+      - lvgl.page.show: alarm_page
+      # Kein Ton auf diesem Board -- Weckung erfolgt rein visuell: Hintergrund UND das
+      # grosse "ALARM"-Label blinken abwechselnd, bis eine der beiden Touchflaechen
+      # angetippt wird.
+      - while:
+          condition:
+            script.is_running: alarm_ring_script
+          then:
+            - lvgl.widget.update:
+                id: alarm_bg
+                bg_color: 0xD32F2F
+            - lvgl.widget.update:
+                id: alarm_text_label
+                text_color: 0xFFFFFF
+            - delay: 500ms
+            - lvgl.widget.update:
+                id: alarm_bg
+                bg_color: 0x330000
+            - lvgl.widget.update:
+                id: alarm_text_label
+                text_color: 0x330000
+            - delay: 500ms
+
+  - id: alarm_stop_script
+    then:
+      - script.stop: alarm_ring_script
+      - script.stop: alarm_snooze_script
+      - lvgl.page.show: clock_page
+
+  - id: alarm_snooze_script
+    then:
+      - script.stop: alarm_ring_script
+      - lvgl.page.show: clock_page
+      - delay: 9min
+      - script.execute: alarm_ring_script
+
+# ---------------------------------------------------------------------------
+# WECK-LOGIK: Weckzeit, Wochentage, Hauptschalter (persistent ueber Neustarts)
+#
+# Alles hier ist bewusst ein REINER Wertespeicher (restore_value/restore_mode fuer die
+# Persistenz), OHNE on_value-Handler, der irgendein LVGL-Widget aktualisiert. Siehe
+# Hinweis oben -- das war die bestaetigte Absturzursache.
+# ---------------------------------------------------------------------------
+
+globals:
+  # Zwischenspeicher fuer die beiden Minuten-Ziffern-Roller (Zehner/Einer). Nur zum
+  # Zusammenrechnen der per Roller gewaehlten Ziffern zu einem Minutenwert -- reine
+  # Widget->Entity-Richtung, kein Bezug zum bekannten Absturzmuster.
+  - id: minute_tens
+    type: int
+    restore_value: false
+    initial_value: "3"
+  - id: minute_ones
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: time_synced
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: sync_blink_state
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+number:
+  # internal: true -- nur noch intern genutzt (Roller-Synchronisation, Alarm-Check).
+  # Die eigentliche HA-seitige Weckzeit-Eingabe ist die "Weckzeit"-Uhrzeit-Entitaet
+  # weiter unten (datetime:).
+  - platform: template
+    name: "Wecker Stunde"
+    id: alarm_hour
+    internal: true
+    unit_of_measurement: "h"
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 7
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Wecker Minute"
+    id: alarm_minute
+    internal: true
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+
+# Native HA-"Uhrzeit"-Entitaet als komfortable Alternative zu den beiden (in HA
+# verborgenen) Number-Entities oben. Bidirektional synchron gehalten: Aenderung ueber
+# HA -> on_value -> number.set (reine Entity->Entity-Aktion, kein LVGL-Zugriff);
+# Aenderung ueber die Roller -> zusaetzlich zum number.set auch datetime.time.set hier.
+datetime:
+  - platform: template
+    type: time
+    id: alarm_time_ha
+    name: "Weckzeit"
+    optimistic: true
+    restore_value: true
+    on_value:
+      then:
+        - number.set:
+            id: alarm_hour
+            value: !lambda "return x.hour;"
+        - number.set:
+            id: alarm_minute
+            value: !lambda "return x.minute;"
+
+switch:
+  # Steuert, ob die Temperaturzeile bei fehlendem Wert "n/v" anzeigt (aus, Standard)
+  # oder komplett ausgeblendet wird (an). Rein HA-seitig, kein Widget auf dem Display.
+  - platform: template
+    name: "Wecker Temperaturzeile ausblenden falls leer"
+    id: temp_hide_switch
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - script.execute: update_temp_label_script
+    on_turn_off:
+      then:
+        - script.execute: update_temp_label_script
+
+  - platform: template
+    name: "Wecker aktiv"
+    id: alarm_master_switch
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Wecker Montag"
+    id: alarm_mon
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Wecker Dienstag"
+    id: alarm_tue
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Wecker Mittwoch"
+    id: alarm_wed
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Wecker Donnerstag"
+    id: alarm_thu
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Wecker Freitag"
+    id: alarm_fri
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: "Wecker Samstag"
+    id: alarm_sat
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    name: "Wecker Sonntag"
+    id: alarm_sun
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+# ---------------------------------------------------------------------------
+# LVGL – Uhrzeit, Einstellungen, Alarm mit grosser Touchflaeche
+# ---------------------------------------------------------------------------
+
+font:
+  # glyphsets: GF_Latin_Core statt (Standard) GF_Latin_Kernel -- deckt europaeische
+  # Sprachen inkl. deutscher Umlaute/ß mit ab. WICHTIG: ein reines `glyphs: "äöü..."`
+  # OHNE glyphsets hat sich als fehlerhaft erwiesen -- dabei fiel der komplette
+  # Basis-Zeichensatz (Buchstaben/Ziffern) weg, nur die Umlaute blieben uebrig ->
+  # ueberall leere Kaestchen statt Text. Deshalb hier explizit glyphsets verwenden.
+  # ignore_missing_glyphs: GF_Latin_Core enthaelt auch kombinierende Akzentzeichen
+  # (fuer Vietnamesisch/Baltisch etc.), die in Roboto Regular fehlen -- fuer uns
+  # irrelevant, daher die sonst bei jedem Build wiederkehrende Warnung stummgeschaltet.
+  - file: "gfonts://Roboto"
+    id: font_huge
+    size: 96
+    bpp: 4
+    glyphsets:
+      - GF_Latin_Core
+    ignore_missing_glyphs: true
+  - file: "gfonts://Roboto"
+    id: font_large
+    size: 40
+    bpp: 4
+    glyphsets:
+      - GF_Latin_Core
+    ignore_missing_glyphs: true
+  - file: "gfonts://Roboto"
+    id: font_medium
+    size: 24
+    bpp: 4
+    glyphsets:
+      - GF_Latin_Core
+    ignore_missing_glyphs: true
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 18
+    bpp: 4
+    glyphsets:
+      - GF_Latin_Core
+    ignore_missing_glyphs: true
+  # Dediziert fuer die grosse Uhrzeit/Datum-Anzeige (ca. 1,5x der urspruenglichen
+  # font_huge/font_medium-Groessen) -- eigene Font-IDs statt font_huge hochzuskalieren,
+  # damit das "ALARM"-Label auf der Alarm-Seite (nutzt font_huge) unveraendert bleibt.
+  - file: "gfonts://Roboto"
+    id: font_clock_time
+    size: 144
+    bpp: 4
+    glyphsets:
+      - GF_Latin_Core
+    ignore_missing_glyphs: true
+  - file: "gfonts://Roboto"
+    id: font_clock_date
+    size: 36
+    bpp: 4
+    glyphsets:
+      - GF_Latin_Core
+    ignore_missing_glyphs: true
+
+lvgl:
+  displays:
+    - waveshare_display
+  touchscreens:
+    - waveshare_touch
+  pages:
+    - id: clock_page
+      bg_color: 0x000000
+      widgets:
+        # Oberste Zeile: Aussen-/Zimmertemperatur (per MQTT von HA, siehe Stufe-25-
+        # Hinweis oben). Text wird von update_temp_label_script befuellt.
+        - label:
+            id: outside_room_temp_label
+            align: TOP_MID
+            y: 16
+            text_font: font_small
+            text_color: 0xAAAAAA
+            text: ""
+        - label:
+            align: CENTER
+            y: -60
+            id: clock_time_label
+            text_font: font_clock_time
+            text_color: 0xFFFFFF
+            text: "--:--"
+        - label:
+            align: CENTER
+            y: 70
+            id: clock_date_label
+            text_font: font_clock_date
+            text_color: 0xAAAAAA
+            text: ""
+        # Blinkt an derselben Stelle wie das Datum, solange NTP noch nicht
+        # synchronisiert ist (Blink-Logik siehe interval: oben).
+        - label:
+            id: sync_status_label
+            align: CENTER
+            y: 70
+            text_font: font_clock_date
+            text_color: 0xFFA500
+            text: "Synchronisiere Zeit"
+        - label:
+            id: alarm_summary_label
+            align: BOTTOM_MID
+            y: -20
+            text_font: font_small
+            text_color: 0xAAAAAA
+            text: ""
+        - obj:
+            id: ntp_status_dot
+            align: TOP_RIGHT
+            x: -16
+            y: 16
+            width: 14
+            height: 14
+            radius: 7
+            bg_color: 0xF44336
+        - button:
+            align: BOTTOM_RIGHT
+            x: -20
+            y: -20
+            width: 90
+            height: 60
+            bg_color: 0x424242
+            radius: 8
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "Einst."
+                  text_color: 0xFFFFFF
+                  text_font: font_small
+            on_click:
+              then:
+                # Alle Widgets auf der Einstellungsseite einmalig aus dem aktuellen
+                # Entity-Zustand befuellen ("pull"), BEVOR die Seite gezeigt wird -- zu
+                # diesem Zeitpunkt laeuft LVGL garantiert schon lange stabil.
+                - lvgl.roller.update:
+                    id: roller_hour
+                    selected_index: !lambda "return (int) id(alarm_hour).state;"
+                - globals.set:
+                    id: minute_tens
+                    value: !lambda "return (int) id(alarm_minute).state / 10;"
+                - globals.set:
+                    id: minute_ones
+                    value: !lambda "return (int) id(alarm_minute).state % 10;"
+                - lvgl.roller.update:
+                    id: roller_minute_tens
+                    selected_index: !lambda "return id(minute_tens);"
+                - lvgl.roller.update:
+                    id: roller_minute_ones
+                    selected_index: !lambda "return id(minute_ones);"
+                - lvgl.widget.update:
+                    id: master_switch_widget
+                    state:
+                      checked: !lambda "return id(alarm_master_switch).state;"
+                - script.execute: update_master_switch_label_script
+                - lvgl.widget.update:
+                    id: checkbox_mon
+                    state:
+                      checked: !lambda "return id(alarm_mon).state;"
+                - lvgl.widget.update:
+                    id: checkbox_tue
+                    state:
+                      checked: !lambda "return id(alarm_tue).state;"
+                - lvgl.widget.update:
+                    id: checkbox_wed
+                    state:
+                      checked: !lambda "return id(alarm_wed).state;"
+                - lvgl.widget.update:
+                    id: checkbox_thu
+                    state:
+                      checked: !lambda "return id(alarm_thu).state;"
+                - lvgl.widget.update:
+                    id: checkbox_fri
+                    state:
+                      checked: !lambda "return id(alarm_fri).state;"
+                - lvgl.widget.update:
+                    id: checkbox_sat
+                    state:
+                      checked: !lambda "return id(alarm_sat).state;"
+                - lvgl.widget.update:
+                    id: checkbox_sun
+                    state:
+                      checked: !lambda "return id(alarm_sun).state;"
+                - lvgl.page.show: settings_page
+
+    - id: settings_page
+      bg_color: 0x1A1A1A
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 20
+            text_font: font_large
+            text_color: 0xFFFFFF
+            text: "Weckzeit"
+
+        - button:
+            align: TOP_LEFT
+            x: 20
+            y: 20
+            width: 100
+            height: 50
+            bg_color: 0xD32F2F
+            radius: 8
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "Zurück"
+                  text_color: 0xFFFFFF
+                  text_font: font_small
+            on_click:
+              then:
+                - script.execute: clock_update_script
+                - lvgl.page.show: clock_page
+
+        # "OK"-Taste -- quittiert die Einstellung mit einem kurzen Aufblitzen der
+        # eingestellten Weckzeit, dann zurueck zur Uhrzeit-Seite.
+        - button:
+            align: TOP_LEFT
+            x: 140
+            y: 20
+            width: 100
+            height: 50
+            bg_color: 0x2E7D32
+            radius: 8
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "OK"
+                  text_color: 0xFFFFFF
+                  text_font: font_small
+            on_click:
+              then:
+                - lvgl.label.update:
+                    id: ok_confirm_label
+                    text: !lambda |-
+                      static char buf[16];
+                      snprintf(buf, sizeof(buf), "%02d:%02d", (int) id(alarm_hour).state,
+                          (int) id(alarm_minute).state);
+                      return buf;
+                - lvgl.widget.show: ok_confirm_label
+                - delay: 150ms
+                - lvgl.widget.hide: ok_confirm_label
+                - delay: 100ms
+                - lvgl.widget.show: ok_confirm_label
+                - delay: 150ms
+                - lvgl.widget.hide: ok_confirm_label
+                - delay: 100ms
+                - lvgl.widget.show: ok_confirm_label
+                - delay: 400ms
+                - lvgl.widget.hide: ok_confirm_label
+                - script.execute: clock_update_script
+                - lvgl.page.show: clock_page
+
+        # Bestaetigungs-Anzeige fuer die OK-Taste -- standardmaessig unsichtbar, blitzt
+        # nur kurz auf (siehe on_click oben).
+        - label:
+            id: ok_confirm_label
+            align: CENTER
+            y: -150
+            text_font: font_large
+            text_color: 0x4CAF50
+            text: ""
+            hidden: true
+
+        - label:
+            id: master_switch_label
+            align: TOP_RIGHT
+            x: -130
+            y: 30
+            text_font: font_small
+            text_color: 0x4CAF50
+            text: "Wecker aktiv"
+        - switch:
+            id: master_switch_widget
+            align: TOP_RIGHT
+            x: -20
+            y: 25
+            width: 60
+            height: 30
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_master_switch
+                    else:
+                      - switch.turn_off: alarm_master_switch
+                - script.execute: update_master_switch_label_script
+
+        - label:
+            align: CENTER
+            x: -140
+            y: -115
+            text_font: font_small
+            text_color: 0xAAAAAA
+            text: "Stunde"
+        - label:
+            align: CENTER
+            x: 40
+            y: -115
+            text_font: font_small
+            text_color: 0xAAAAAA
+            text: "Minuten"
+
+        - roller:
+            id: roller_hour
+            align: CENTER
+            x: -140
+            y: -20
+            width: 100
+            height: 140
+            mode: INFINITE
+            text_font: font_medium
+            options:
+              - "00"
+              - "01"
+              - "02"
+              - "03"
+              - "04"
+              - "05"
+              - "06"
+              - "07"
+              - "08"
+              - "09"
+              - "10"
+              - "11"
+              - "12"
+              - "13"
+              - "14"
+              - "15"
+              - "16"
+              - "17"
+              - "18"
+              - "19"
+              - "20"
+              - "21"
+              - "22"
+              - "23"
+            visible_row_count: 3
+            on_value:
+              then:
+                - number.set:
+                    id: alarm_hour
+                    value: !lambda "return (float) x;"
+                - datetime.time.set:
+                    id: alarm_time_ha
+                    time: !lambda |-
+                      return {.second = 0, .minute = (int) id(alarm_minute).state,
+                          .hour = (int) x};
+
+        - label:
+            align: CENTER
+            x: -40
+            y: -20
+            text_font: font_large
+            text_color: 0xFFFFFF
+            text: ":"
+
+        # Minute als zwei Ziffern-Roller (Zehner 0-5, Einer 0-9) statt einem 5er-Schritt-
+        # Roller -- so ist jede Minute 0-59 waehlbar. Beide schreiben nur in Richtung
+        # Widget->Entity (ueber die Globals minute_tens/minute_ones + number.set), nie
+        # umgekehrt automatisch -- das bewaehrte, sichere Muster.
+        - roller:
+            id: roller_minute_tens
+            align: CENTER
+            x: 20
+            y: -20
+            width: 60
+            height: 140
+            mode: INFINITE
+            text_font: font_medium
+            options:
+              - "0"
+              - "1"
+              - "2"
+              - "3"
+              - "4"
+              - "5"
+            visible_row_count: 3
+            on_value:
+              then:
+                - globals.set:
+                    id: minute_tens
+                    value: !lambda "return x;"
+                - number.set:
+                    id: alarm_minute
+                    value: !lambda "return (float) (id(minute_tens) * 10 + id(minute_ones));"
+                - datetime.time.set:
+                    id: alarm_time_ha
+                    time: !lambda |-
+                      return {.second = 0, .minute = id(minute_tens) * 10 + id(minute_ones),
+                          .hour = (int) id(alarm_hour).state};
+
+        - roller:
+            id: roller_minute_ones
+            align: CENTER
+            x: 90
+            y: -20
+            width: 60
+            height: 140
+            mode: INFINITE
+            text_font: font_medium
+            options:
+              - "0"
+              - "1"
+              - "2"
+              - "3"
+              - "4"
+              - "5"
+              - "6"
+              - "7"
+              - "8"
+              - "9"
+            visible_row_count: 3
+            on_value:
+              then:
+                - globals.set:
+                    id: minute_ones
+                    value: !lambda "return x;"
+                - number.set:
+                    id: alarm_minute
+                    value: !lambda "return (float) (id(minute_tens) * 10 + id(minute_ones));"
+                - datetime.time.set:
+                    id: alarm_time_ha
+                    time: !lambda |-
+                      return {.second = 0, .minute = id(minute_tens) * 10 + id(minute_ones),
+                          .hour = (int) id(alarm_hour).state};
+
+        - label:
+            align: CENTER
+            y: 100
+            text_font: font_medium
+            text_color: 0xFFFFFF
+            text: "Wochentage"
+
+        # Checkboxen: indicator (die eigentliche Ankreuz-Box) ist standardmaessig GRAU
+        # (nicht angehakt) und wird GRUEN, sobald sie angehakt ist -- offizielles
+        # ESPHome-LVGL-Muster fuer zustandsabhaengige Stile.
+        - checkbox:
+            id: checkbox_mon
+            align: CENTER
+            x: -270
+            y: 150
+            text: "Mo"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_mon
+                    else:
+                      - switch.turn_off: alarm_mon
+        - checkbox:
+            id: checkbox_tue
+            align: CENTER
+            x: -180
+            y: 150
+            text: "Di"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_tue
+                    else:
+                      - switch.turn_off: alarm_tue
+        - checkbox:
+            id: checkbox_wed
+            align: CENTER
+            x: -90
+            y: 150
+            text: "Mi"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_wed
+                    else:
+                      - switch.turn_off: alarm_wed
+        - checkbox:
+            id: checkbox_thu
+            align: CENTER
+            x: 0
+            y: 150
+            text: "Do"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_thu
+                    else:
+                      - switch.turn_off: alarm_thu
+        - checkbox:
+            id: checkbox_fri
+            align: CENTER
+            x: 90
+            y: 150
+            text: "Fr"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_fri
+                    else:
+                      - switch.turn_off: alarm_fri
+        - checkbox:
+            id: checkbox_sat
+            align: CENTER
+            x: 180
+            y: 150
+            text: "Sa"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_sat
+                    else:
+                      - switch.turn_off: alarm_sat
+        - checkbox:
+            id: checkbox_sun
+            align: CENTER
+            x: 270
+            y: 150
+            text: "So"
+            text_color: 0xFFFFFF
+            indicator:
+              bg_color: 0x555555
+              checked:
+                bg_color: 0x4CAF50
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: "return x;"
+                    then:
+                      - switch.turn_on: alarm_sun
+                    else:
+                      - switch.turn_off: alarm_sun
+
+    # Alarm-Seite: KEIN physischer Taster auf diesem Board -- stattdessen zwei GROSSE
+    # Touchflaechen, damit man sie auch halb verschlafen sicher trifft. Kein Ton (kein
+    # Audio auf diesem Board) -- die Weckung ist rein visuell: Hintergrund UND das grosse
+    # "ALARM"-Label blinken abwechselnd. Die Tasten sind bewusst nicht komplett riesig
+    # (260x260), damit das "ALARM"-Label am oberen Rand nicht ueberlappt wird.
+    - id: alarm_page
+      bg_color: 0x330000
+      widgets:
+        - obj:
+            id: alarm_bg
+            width: 100%
+            height: 100%
+            align: CENTER
+            bg_color: 0x330000
+            border_width: 0
+            radius: 0
+        - label:
+            id: alarm_text_label
+            align: TOP_MID
+            y: 30
+            text_font: font_huge
+            text_color: 0xFF1744
+            text: "ALARM"
+        - button:
+            align: LEFT_MID
+            x: 20
+            y: 60
+            width: 260
+            height: 260
+            bg_color: 0x2E7D32
+            radius: 16
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "SNOOZE\n9 Min"
+                  text_color: 0xFFFFFF
+                  text_font: font_large
+            on_click:
+              then:
+                - script.execute: alarm_snooze_script
+        - button:
+            align: RIGHT_MID
+            x: -20
+            y: 60
+            width: 260
+            height: 260
+            bg_color: 0xD32F2F
+            radius: 16
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "STOP"
+                  text_color: 0xFFFFFF
+                  text_font: font_large
+            on_click:
+              then:
+                - script.execute: alarm_stop_script
