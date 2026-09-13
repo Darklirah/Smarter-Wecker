@@ -67,3 +67,39 @@ Die Zwischendateien der Stufen 01–23, 25, 26 und 27 wurden aus dem Repo entfer
 es übersichtlich zu halten, nachdem ihr Inhalt hier zusammengefasst und in
 [Docs/ESPHome-Lessons-Learned.md](Docs/ESPHome-Lessons-Learned.md) dokumentiert
 wurde (vollständig weiterhin in der Git-Historie enthalten).
+
+## Phase 3: Ereignisgesteuerte Live-Sync + Bildschirm-Zucken (29–38)
+
+Ausgangspunkt: der Nutzer bemerkte ein regelmäßiges kurzes Zucken/Blitzen der Anzeige
+und vermutete das in Stufe 27 eingeführte 500ms-Polling (Hauptschalter+Checkboxen bei
+jedem Tick nachziehen, unabhängig ob sich etwas geändert hat) als Ursache. Eine
+schrittweise Fehlersuche über mehrere Zwischenstufen (nur noch lokal in `Entwuerfe/`,
+nicht mehr einzeln committet):
+
+| Stufe | Änderung | Ergebnis |
+|---|---|---|
+| 29 | 500ms-Polling durch ereignisgesteuerte `on_turn_on`/`on_turn_off`-Handler ersetzt (mit `ui_ready`-Gate gegen das bekannte Boot-Absturzmuster) | Zucken weiterhin da; zusätzlich Regression: HA→Gerät-Sync brach komplett ab |
+| 30 | Diagnose-Logging in allen Schalter-Handlern + 3s-Fallback-Polling als Absicherung | Log bewies: ereignisgesteuerter Weg feuert korrekt zeitgleich zu HA-Änderungen — das 3s-Polling war nie nötig |
+| 31 | `display: update_interval` testweise 1s→5s | Zucken seltener, aber nicht weg (Test war durch das gleichzeitige 3s-Polling nicht sauber isoliert) |
+| 32 | 3s-Fallback-Polling entfernt; Weckzeit-Roller bekommen dieselbe ereignisgesteuerte Live-Sync (neues `roller_driven_update`-Flag verhindert Selbstüberschreiben während des eigenen Scrollens) | Weckzeit-Sync aus HA funktioniert jetzt sofort |
+| 33 | `update_interval` testweise 1s→30s (sauber isolierter Test) | Zucken **unverändert** — `update_interval` damit als Ursache widerlegt |
+| 34 | `wifi: power_save_mode: none` (bekannter Kandidat für periodische CPU-Stocker) | Kein eindeutiger Effekt, aber beibehalten |
+| 35 | `pclk_frequency` 16MHz→8,2MHz (Nutzerwunsch: 20Hz Bildwiederholrate reicht) | **Fehlgeschlagen** — kompletter Sync-Verlust des Panels (wechselnde Farbflächen) |
+| 36 | Rollback auf letzten funktionierenden Stand (= Stufe 34) | Display wieder normal, Zucken (seltener/unregelmäßig) weiterhin da |
+| 37 | `pclk_frequency` 16MHz→10MHz (vorsichtigerer Test) | Ebenfalls Sync-Verlust |
+| 38 | `pclk_frequency` 16MHz→14MHz | **Vom Nutzer am Gerät bestätigt: deutliche Besserung** |
+
+**Kernerkenntnisse:**
+- Der ESPHome-`mipi_rgb`-Treiber bietet keinen direkten Bounce-/Doppelpuffer-Parameter
+  über YAML (im Quellcode geprüft) — der einzige wirksame Hebel gegen vermutete
+  PSRAM-Bandbreiten-Konkurrenz ist `pclk_frequency`.
+- Dieses Panel hat sehr wenig Spielraum unter dem Referenztakt: 14MHz funktioniert,
+  10MHz und darunter führen zu komplettem Sync-Verlust (nicht nur Zucken).
+- Das ursprünglich für Roller bewusst ausgeschlossene Live-Sync-Muster (Stufe 27) lässt
+  sich sicher nachrüsten, wenn ein zusätzliches "wurde die Änderung gerade vom Widget
+  selbst ausgelöst"-Flag (`roller_driven_update`) einen Selbstüberschreib-Rücklauf
+  während aktiver Nutzer-Interaktion verhindert.
+
+Die Zwischendateien der Stufen 29–37 liegen nicht im Repo (nur lokal in `Entwuerfe/`,
+Stufe 38 wurde direkt zusammengeführt) — der Endstand ist in
+`Smart-Wecker-Waveshare_MQTT.yaml`.

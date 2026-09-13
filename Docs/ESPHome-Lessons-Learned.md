@@ -257,3 +257,104 @@ auf einem **komplett anderen Board mit I2C auf GPIO8/9** auf (Waveshare
 ESP32-S3-Touch-LCD-7, keinerlei USB_SERIAL_JTAG-Pin-Überschneidung möglich) — letztlich
 durch die Bisektion oben endgültig als Fehlspur entlarvt (die eigentliche Ursache war
 die Number→Roller-Rückkopplung, siehe oben).
+
+## Ereignisgesteuertes LVGL-Update ist sicher möglich — mit `ui_ready`-Gate + Selbstüberschreib-Schutz (13.09.2026)
+
+Die ursprüngliche Absturz-Bisektion (siehe oben) hatte dazu geführt, dass JEDE
+automatische Entity→LVGL-Rückkopplung kategorisch vermieden wurde (nur "pull" beim
+Seitenöffnen). Das führte zu einem Folgeproblem: Fernänderungen (z.B. über Home
+Assistant) wurden auf dem Display nicht live sichtbar, bis die Seite neu geöffnet
+wurde. Der naheliegende erste Fix (ein 500ms-Interval, das unbedingt bei jedem Tick
+nachzieht) hat das gelöst, aber durch die hohe, unnötige Update-Frequenz zu spürbarem
+Bildschirm-Zucken geführt.
+
+**Erkenntnis:** Der ursprüngliche Absturz war nicht "LVGL-Update durch Entity-Änderung"
+an sich, sondern speziell **LVGL-Update während des automatischen Boot-Restores**
+(`restore_value`/`restore_mode`), bevor LVGL fertig initialisiert ist. Sobald man das
+gezielt ausschließt, ist ereignisgesteuertes Aktualisieren sicher UND vermeidet
+unnötige Redraws:
+
+```yaml
+globals:
+  - id: ui_ready
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+esphome:
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s              # LVGL ist zu diesem Zeitpunkt garantiert stabil
+      - globals.set: {id: ui_ready, value: "true"}
+
+switch:
+  - platform: template
+    id: my_switch
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      then:
+        - if:
+            condition: {lambda: "return id(ui_ready);"}
+            then: [{lvgl.widget.update: {id: my_widget, state: {checked: true}}}]
+```
+
+Für Widgets mit **eigenem Nutzer-Interaktionszustand** (z.B. ein Roller, der gerade
+gescrollt wird) reicht das Gate allein nicht: der Roller löst selbst eine
+Entity-Änderung aus (`on_value` → `number.set`), die dann wieder ein `lvgl.roller.update`
+auf denselben Roller zurückspiegeln würde — ein sich selbst überschreibender Rücklauf,
+der beim aktiven Scrollen sichtbar stören kann. Zusätzlicher Schutz: ein zweites Flag,
+das nur während der Widget→Entity-Richtung gesetzt ist:
+
+```yaml
+globals:
+  - id: roller_driven_update
+    type: bool
+    initial_value: "false"
+
+# im Roller selbst (Widget -> Entity):
+on_value:
+  then:
+    - globals.set: {id: roller_driven_update, value: "true"}
+    - number.set: ...
+    - globals.set: {id: roller_driven_update, value: "false"}
+
+# in der Entity (Entity -> Widget, z.B. von Home Assistant):
+on_value:
+  then:
+    - if:
+        condition: {lambda: "return id(ui_ready) && !id(roller_driven_update);"}
+        then: [{lvgl.roller.update: ...}]
+```
+
+So aktualisiert sich der Roller live bei Fernänderungen, ohne sich beim eigenen
+Scrollen selbst zu stören. Details/Herleitung siehe CHANGELOG.md, Phase 3 (Stufen 29-38).
+
+## `pclk_frequency` senken kann PSRAM-Bandbreiten-Zucken lindern — aber Panel hat einen Mindesttakt (13.09.2026)
+
+Bei ESP32-S3-Boards mit parallelem RGB-Display und Framebuffer im PSRAM (hier:
+`display: platform: mipi_rgb`) kann ein kurzes, unregelmäßiges Bildschirm-Zucken/
+Bildversatz-Flackern auftreten, wenn die CPU (z.B. durch WLAN-Aktivität) kurzzeitig zu
+stark um PSRAM-Bandbreite mit dem Display-DMA konkurriert. ESPHomes `mipi_rgb`-Treiber
+bietet dafür **keinen** direkten Bounce-/Doppelpuffer-Parameter über YAML (im
+Quellcode von `esphome/components/mipi_rgb/display.py` geprüft — nur `pclk_frequency`,
+Timing-Porches, Pins, Farbformat). Der einzige verfügbare Hebel ist daher, den
+Pixeltakt (`pclk_frequency`) zu senken — das reduziert die pro Sekunde benötigte
+PSRAM-Lesebandbreite direkt proportional.
+
+Rechenformel für die tatsächliche Bildwiederholrate aus `pclk_frequency`:
+
+```
+Bildwiederholrate = pclk_frequency / ((Breite + hsync-Porches) * (Höhe + vsync-Porches))
+```
+
+**WICHTIG:** Das Panel hat nur wenig Spielraum nach unten. Auf dem hier verwendeten
+Waveshare-Panel (Referenzwert 16MHz, ≈39Hz) hat eine Absenkung auf 10MHz oder 8,2MHz
+NICHT nur nichts gebracht, sondern zu einem **kompletten Synchronisationsverlust**
+geführt (wechselnde Farbflächen statt eines normalen Bildes — ein deutlich
+schwerwiegenderer Fehler als das ursprüngliche Zucken). Bei 14MHz (≈34Hz) funktionierte
+das Panel weiterhin normal und das Zucken wurde spürbar seltener. Vorgehen bei einem
+ähnlichen Problem: **in kleinen Schritten** (z.B. 2MHz) vom Referenzwert nach unten
+tasten, nach jedem Schritt sofort prüfen, ob das Bild überhaupt noch normal
+synchronisiert (nicht nur, ob das Zucken besser wird) — der Übergang von "funktioniert
+mit Zucken" zu "Totalausfall" kann abrupt sein, nicht graduell.

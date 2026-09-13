@@ -150,6 +150,23 @@ Weitere, beim Ausbau der Funktionen entdeckte ESPHome-Fallstricke (Schriftart-Gl
 Ein stufenweiser Verlauf aller Entwicklungsschritte steht in
 [CHANGELOG.md](CHANGELOG.md).
 
+## Offene Probleme
+
+- **Gelegentliches, kurzes Bildschirm-Zucken/Blitzen**: Tritt unregelmäßig auf, ist
+  aber nach einer ausführlichen Fehlersuche (siehe CHANGELOG.md, Phase 3) deutlich
+  seltener geworden. Ausgeschlossen wurden: periodisches Nachziehen von
+  Schalter-Widgets (jetzt komplett ereignisgesteuert), die Bildwiederholrate des
+  Displays (`update_interval`, 1s bis 30s getestet, kein Effekt), WLAN-Energiesparmodus
+  (deaktiviert, kein eindeutiger Effekt). Vermutete Ursache: kurzzeitige
+  PSRAM-Bandbreiten-Konkurrenz zwischen dem RGB-Display-DMA und anderen Komponenten —
+  ein bekanntes Muster bei ESP32-S3-Boards mit parallelem RGB-Display und Framebuffer
+  im PSRAM. Der Pixeltakt (`pclk_frequency`) wurde deswegen von 16MHz auf 14MHz
+  gesenkt, was die Häufigkeit deutlich reduziert hat — **das Panel verträgt aber keinen
+  wesentlich niedrigeren Takt**: sowohl 10MHz als auch 8,2MHz haben zu einem
+  kompletten Synchronisationsverlust geführt (wechselnde Farbflächen statt normaler
+  Anzeige). Das Zucken gilt damit als deutlich gemildert, aber nicht mit Sicherheit
+  vollständig behoben.
+
 ## Dateien in diesem Projekt
 
 - `Smart-Wecker-Waveshare_MQTT.yaml` — **aktueller, empfohlener Stand**: alles aus

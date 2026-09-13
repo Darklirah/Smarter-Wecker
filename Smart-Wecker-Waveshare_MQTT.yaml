@@ -2,7 +2,7 @@
 # Board: Waveshare ESP32-S3-Touch-LCD-7 (Basisversion, CH422G-IO-Expander)
 # Details/Quellen: siehe Docs/hardware-specs.md und Docs/quellen.md
 #
-# Unterschiede zur CrowPanel-Variante (../Smart-Wecker/):
+# Hardware-Einschraenkungen dieses Boards:
 #   - KEINE Audioausgabe (dieses Board hat keinen Onboard-Verstaerker/Lautsprecheranschluss
 #     und keine sicher verlötbaren freien GPIOs dafuer -- siehe Docs/hardware-specs.md)
 #   - KEIN physischer Taster (kein sicher nutzbarer freier GPIO dafuer) -- stattdessen eine
@@ -10,44 +10,67 @@
 #   - Backlight ist hier nur Ein/Aus (kein PWM/Dimmen) -- Hardware-/Paket-Eigenschaft dieses
 #     Boards, siehe Docs/hardware-specs.md
 #
-# HINWEIS ZUR HARDWARE-KONFIGURATION (16.09.2026):
+# HINWEIS ZUR HARDWARE-KONFIGURATION:
 # Das anfangs genutzte Community-Paket (inytar/waveshare-esp32-s3-touch-lcd-7-esphome) hat
 # auf diesem konkreten Geraet zu Boot-Abstuerzen gefuehrt (PSRAM-Timing UND ein
 # I2C-"Bus Recovery"-Crash). Der Nutzer hat eine selbst getestete, nachweislich
 # funktionierende Hardware-Config (Waveshare_Swirch.yaml, per "ESPHome Designer" erzeugt)
-# beigesteuert -- die Hardware-Sektion unten ist 1:1 von dort uebernommen (u.a.
-# flash_size: 16MB statt 8MB, KEIN execute_from_psram/experimental_features, andere
-# Sync-Porch-Werte, display update_interval: 1s statt never).
+# beigesteuert -- die Hardware-Sektion unten ist im Kern von dort uebernommen (u.a.
+# flash_size: 16MB statt 8MB, KEIN execute_from_psram/experimental_features, die
+# Sync-Porch-Werte). EINZIGE spaetere Abweichung von der Referenz: `pclk_frequency`
+# wurde von 16MHz auf 14MHz gesenkt (siehe Abschnitt "Bildschirm-Zucken" unten) --
+# alle anderen Hardware-Werte NICHT ohne erneuten Hardware-Test veraendern.
 #
-# HINWEIS ZUR WECK-LOGIK (16.09.2026, nach ausfuehrlicher Fehlersuche, siehe
+# HINWEIS ZUR WECK-LOGIK (nach ausfuehrlicher Fehlersuche, siehe
 # ../ESPHome-Lessons-Learned.md): Eine 13-stufige Bisektion (smart-wecker-waveshare-01.yaml
 # bis -13.yaml) hat gezeigt, dass JEDE direkte Rueckkopplung "Entity aendert sich -> LVGL-
-# Widget wird per on_value/on_boot automatisch aktualisiert" (z.B. number.on_value ->
-# lvgl.roller.update, oder restore_mode, das ein LVGL-Widget beim Booten setzt) zu
-# Abstuerzen fuehrt -- entweder sofort beim Booten (LVGL existiert noch nicht) oder
-# verzoegert im laufenden Betrieb (Rueckkopplungsschleife). Deshalb hier bewusst OHNE
-# `switch: platform: lvgl` (das intern denselben restore-at-boot-Mechanismus nutzen
-# wuerde) und OHNE `number.on_value`/`switch.on_state` mit lvgl.*.update. Stattdessen:
-# alle Entities sind reine Wertespeicher, und der jeweilige Wert wird NUR beim
-# tatsaechlichen Oeffnen der Einstellungsseite ("Einst."-Button) einmalig in die Widgets
-# gezogen ("pull"). Die Gegenrichtung (Widget-Interaktion -> Entity setzen, z.B.
-# roller.on_value -> number.set) ist unveraendert die ganze Zeit unproblematisch gewesen
-# und bleibt bestehen.
+# Widget wird automatisch aktualisiert" WAEHREND DES BOOT-RESTORES (bevor LVGL
+# initialisiert ist) zu Abstuerzen fuehrt. Seit den Fixes fuer das Bildschirm-Zucken
+# (siehe unten) gibt es dafuer eine kontrollierte, sichere Ausnahme: die on_turn_on/
+# on_turn_off-Handler der Schalter UND der Weckzeit-on_value-Handler (Roller) duerfen ein
+# lvgl.*.update ausloesen, aber NUR wenn ein globales `ui_ready`-Flag bereits `true` ist
+# (wird erst 2s NACH on_boot gesetzt, siehe esphome.on_boot weiter unten) -- das umgeht
+# exakt das urspruengliche Absturzmuster, weil LVGL zu diesem Zeitpunkt garantiert fertig
+# initialisiert ist. Ein zusaetzliches `roller_driven_update`-Flag (siehe globals:)
+# verhindert ausserdem, dass ein Roller sich waehrend des eigenen Scrollens selbst
+# ueberschreibt. Details: ESPHome-Lessons-Learned.md / Memory
+# "esphome-number-lvgl-roller-setup-race".
 #
-# HINWEIS ZUR PERSISTENZ (16.09.2026): Die Weckzeit wurde nach jedem Neustart auf 00:00
-# zurueckgesetzt. NICHT die Ursache war esphome.on_boot's Standard-Prioritaet (600, wie
-# zunaechst vermutet und mit priority:-100 "gefixt" -- blieb wirkungslos). Die ECHTE
-# Ursache: ESPHome schreibt restore_value-Aenderungen erst nach `flash_write_interval`
-# (Standard 1 Minute!) auf den Flash -- ein Neustart kurz nach dem Aendern verlor die
-# Aenderung also immer. Fix: `preferences: flash_write_interval: 0s` weiter unten.
+# HINWEIS ZUR PERSISTENZ: Die Weckzeit wurde nach jedem Neustart auf 00:00
+# zurueckgesetzt. NICHT die Ursache war esphome.on_boot's Standard-Prioritaet (600).
+# Die ECHTE Ursache: ESPHome schreibt restore_value-Aenderungen erst nach
+# `flash_write_interval` (Standard 1 Minute!) auf den Flash -- ein Neustart kurz nach
+# dem Aendern verlor die Aenderung also immer. Fix: `preferences: flash_write_interval:
+# 0s` weiter unten (schreibt sofort).
 #
-# STAND (16.09.2026, Stufe 23, vom Nutzer am Geraet bestaetigt funktionierend):
-#   - Uhrzeit (1,5x groesser) + Datum, blinkendes "Synchronisiere Zeit" bis zum ersten
-#     NTP-Sync, NTP-Status-Punkt, Statuszeile unten ("Wecker: HH:MM - Wochentage")
+# BILDSCHIRM-ZUCKEN (13.09.2026, ausfuehrliche Fehlersuche, siehe CHANGELOG.md fuer die
+# volle Chronik): Der Nutzer bemerkte ein kurzes, unregelmaessiges Zucken/Bildversatz-
+# Flackern der Anzeige. Ausgeschlossen wurden nacheinander: periodisches Widget-Polling
+# der Schalter (jetzt komplett ereignisgesteuert statt gepollt, siehe unten), display:
+# update_interval (1s bis 30s getestet, kein messbarer Unterschied), WLAN-Modem-Sleep
+# (`power_save_mode: none` ergaenzt, kein klarer Effekt, aber beibehalten). Vermutete
+# Ursache: PSRAM-Bandbreiten-Konkurrenz zwischen dem RGB-Display-DMA und anderen
+# Komponenten -- ein bekanntes Muster bei ESP32-S3-Boards mit parallelem RGB-Display und
+# Framebuffer im PSRAM; der ESPHome mipi_rgb-Treiber bietet dafuer keinen direkten
+# Bounce-Buffer-Parameter ueber YAML (im Quellcode gegengeprueft). Einziger wirksamer
+# Hebel: `pclk_frequency` (Pixeltakt) senken, reduziert die PSRAM-Bandbreitenlast.
+# ACHTUNG: 8,2MHz und 10MHz haben beide zu komplettem Sync-Verlust des Panels gefuehrt
+# (wechselnde Farbflaechen statt normaler Anzeige) -- **NICHT unter 14MHz gehen, dieses
+# Panel hat sehr wenig Spielraum unter dem Referenztakt 16MHz.** Bei 14MHz (~34Hz
+# Bildwiederholrate statt ~39Hz) hat der Nutzer am Geraet eine deutliche Besserung
+# bestaetigt (13.09.2026) -- das ist der jetzige, empfohlene Wert. Das Zucken ist damit
+# deutlich seltener, aber NICHT mit Sicherheit vollstaendig ausgeschlossen -- falls es
+# erneut auffaellt, waere ein Wert zwischen 14 und 16MHz der naechste Versuch.
+#
+# STAND (13.09.2026, vom Nutzer am Geraet bestaetigt funktionierend):
+#   - Uhrzeit (grosse 144px-Anzeige) + Datum, blinkendes "Synchronisiere Zeit" bis zum
+#     ersten Sync, NTP-Status-Punkt, Statuszeile unten ("Wecker: HH:MM - Wochentage")
+#   - Aussen-/Zimmertemperatur oben (per MQTT, Quelle frei aus Home Assistant waehlbar,
+#     Schalter zum Ausblenden bei fehlendem Wert)
 #   - Einstellungsseite: Stunden-Roller + zwei Minuten-Ziffern-Roller (Zehner/Einer,
-#     jede Minute 0-59 waehlbar, alle drei Roller mit Endlos-Scroll/mode:INFINITE und
-#     groesserer Schrift), Hauptschalter mit dynamischem "Wecker aktiv/inaktiv"-Label
-#     (gruen/grau), 7 Wochentag-Checkboxen (grau=aus, gruen=an)
+#     Endlos-Scroll), Hauptschalter mit dynamischem "Wecker aktiv/inaktiv"-Label,
+#     7 Wochentag-Checkboxen -- ALLE live synchronisiert bei Fernaenderung (z.B. ueber
+#     Home Assistant), ohne die Einstellungsseite verlassen/neu oeffnen zu muessen
 #   - "OK"-Taste quittiert mit kurzem Aufblitzen der eingestellten Zeit, "Zurück"-Taste
 #     -- beide kehren zur Uhr zurueck
 #   - Native Home-Assistant-Entitaet "Weckzeit" (datetime/time) fuer komfortable
@@ -60,10 +83,6 @@
 #   - Schrift: glyphsets: GF_Latin_Core (statt Standard GF_Latin_Kernel) fuer deutsche
 #     Umlaute/ß -- WICHTIG: ein rohes `glyphs: "äöü..."` ohne glyphsets hat sich als
 #     fehlerhaft erwiesen (kompletter Basis-Zeichensatz fiel weg, nur leere Kaestchen)
-
-# STUFE 24: Zeit wird beim Start ZUERST von Home Assistant abgefragt (ueber die bereits
-# bestehende native API-Verbindung), NTP bleibt als unabhaengige zweite Zeitquelle/
-# Fallback bestehen.
 #
 # Kosmetik: oberste Zeile zeigt Aussen-/Zimmertemperatur. Die Werte kommen per MQTT
 # (Topics "smartwecker/aussentemperatur" / ".../zimmertemperatur"), veroeffentlicht von
@@ -75,21 +94,10 @@
 # Temperaturzeile ausblenden falls leer") steuert, ob bei fehlendem Wert "n/v"
 # angezeigt oder die ganze Zeile ausgeblendet wird.
 #
-# Bugfix: "Wecker aktiv/inaktiv"-Label UND die Wochentag-Checkboxen zeigten eine per
-# Home Assistant (z.B. ueber das Dashboard) ferngesteuerte Aenderung erst nach
-# erneutem Verlassen+Oeffnen der Einstellungsseite an -- der bisherige "pull" passierte
-# NUR beim Klick auf "Einst.". Fix: der schon vorhandene 500ms-Interval (bisher nur
-# fuer das Sync-Blinken genutzt) ruft jetzt zusaetzlich, UNBEDINGT (nicht nur waehrend
-# der Zeit-Synchronisation), ein Script auf, das Hauptschalter-Widget+Label und alle
-# 7 Checkboxen aus dem aktuellen Entity-Zustand nachzieht. Bewusst NICHT fuer die Roller
-# gemacht (Weckzeit/Stunde/Minute) -- dort koennte ein periodisches Ueberschreiben waehrend
-# des Scrollens mit der Nutzer-Interaktion kollidieren; Switches/Checkboxen haben dieses
-# Rueckkopplungsrisiko nicht (kein Drag-Zustand), ein periodisches lvgl.widget.update mit
-# gleichem Wert loest hoechstens einen einmaligen, folgenlosen No-Op-Durchlauf durch den
-# jeweiligen on_value-Handler aus (setzt dieselbe Entity nochmal auf denselben Wert).
-#
-# Diese Datei ersetzt die bisherigen nummerierten Zwischenstufen -26/-27 als aktueller,
-# empfohlener Stand (inkl. MQTT-Temperaturanzeige) -- siehe CHANGELOG.md.
+# Diese Datei ist der aktuelle, empfohlene Stand. Die vollstaendige Stufe-fuer-Stufe-
+# Historie (inkl. der urspruenglichen Absturz-Bisektion 01-13 und der Zucken-Fehlersuche
+# 29-38) steht in CHANGELOG.md; neue Experimente/Zwischenstufen landen ab jetzt im
+# lokalen, nicht committeten Ordner Entwuerfe/.
 
 esphome:
   name: smart-wecker-waveshare
@@ -109,6 +117,13 @@ esphome:
             return {.second = 0, .minute = (int) id(alarm_minute).state,
                 .hour = (int) id(alarm_hour).state};
       - script.execute: update_temp_label_script
+      # STUFE 29: 2s nach dem Boot ist LVGL garantiert stabil initialisiert -- ab jetzt
+      # duerfen die neuen on_turn_on/on_turn_off-Handler der Schalter direkt ein
+      # lvgl.widget.update ausloesen (siehe Kommentar am Dateianfang).
+      - delay: 2s
+      - globals.set:
+          id: ui_ready
+          value: "true"
 
 esp32:
   variant: esp32s3
@@ -142,6 +157,16 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  # STUFE 34 (EXPERIMENT): der ESP32 schaltet das WLAN-Modul standardmaessig periodisch
+  # in einen Stromspar-/Modem-Sleep-Modus und weckt es alle paar Sekunden kurz auf --
+  # ein bekannter Ursache-Kandidat fuer periodische kurze CPU-Stocker, die sich bei
+  # einem parallelen RGB-Display (kein echter Doppelpuffer, kontinuierlicher Pixeltakt)
+  # als kurzes Zucken/Tearing zeigen koennen. `none` deaktiviert den Sparmodus komplett
+  # (etwas hoeherer Stromverbrauch, bei einem staendig am Netzteil haengenden
+  # Wecker unerheblich). Alle bisherigen Tests (Update-Frequenzen der LVGL-Widgets,
+  # display: update_interval von 1s bis 30s) haben das Zucken NICHT beeinflusst --
+  # dieser Kandidat ist unabhaengig von der gesamten bisherigen Anwendungslogik.
+  power_save_mode: none
   ap:
     ssid: "Smart-Wecker-Waveshare Fallback"
 
@@ -215,10 +240,21 @@ display:
     model: ESP32-S3-TOUCH-LCD-7-800X480
     id: waveshare_display
     rotation: 0
+    # STUFE 33 ERGEBNIS (13.09.2026): Zucken UNVERAENDERT auch bei 30s -- damit ist
+    # update_interval als Ursache widerlegt (sonst haette sich die Zuck-Frequenz
+    # sichtbar auf ~30s strecken muessen). Wieder auf den verifizierten
+    # Hardware-Referenzwert 1s zurueckgesetzt. Naechster Verdaechtiger: WLAN-Modem-Sleep
+    # (siehe wifi:-Sektion und Kommentar am Dateianfang, Stufe 34).
     update_interval: 1s
     auto_clear_enabled: false
     color_order: RGB
-    pclk_frequency: 16MHZ
+    # STUFE 38 (EXPERIMENT): 8,2MHz und 10MHz haben beide die Synchronisation verloren
+    # (wechselnde Farbflaechen) -- 14MHz ist nur noch ~12,5% unter dem Referenzwert
+    # 16MHz, entspricht ca. 14.000.000 / 410.000 =~ 34,1Hz (Rechnung siehe
+    # Stufe-35-Kommentar weiter oben). Falls das Panel auch hierbei die Synchronisation
+    # verliert, bleibt es endgueltig bei 16MHz -- dieses Panel scheint sehr wenig
+    # Spielraum unter dem Referenztakt zu haben.
+    pclk_frequency: 14MHZ
     dimensions:
       width: 800
       height: 480
@@ -278,11 +314,15 @@ interval:
                   - lvgl.widget.show: sync_status_label
                 else:
                   - lvgl.widget.hide: sync_status_label
-      # NEU (Stufe 27): unbedingt (nicht nur waehrend der Zeit-Synchronisation) bei
-      # jedem Tick den Hauptschalter+Checkboxen aus dem aktuellen Entity-Zustand
-      # nachziehen, damit eine Fernsteuerung (z.B. ueber Home Assistant) sofort am
-      # Display sichtbar wird, statt erst nach erneutem Oeffnen der Einstellungsseite.
-      - script.execute: live_sync_switches_script
+      # STUFE 29: das unbedingte (Stufe 27) Nachziehen von Hauptschalter+Checkboxen bei
+      # JEDEM Tick wurde entfernt. STUFE 30 hatte testweise ein 3s-Fallback-Polling
+      # ergaenzt, falls der ereignisgesteuerte Weg nicht zuverlaessig greift -- das
+      # Log vom 13.09.2026 hat aber bestaetigt (Zeitstempel passen exakt zu den
+      # HA-Aenderungen, nicht zum 3s-Raster), dass der ereignisgesteuerte Weg
+      # zuverlaessig funktioniert. STUFE 32: das 3s-Polling ist daher wieder entfernt --
+      # jede zusaetzliche periodische Aktualisierung war ein moeglicher Beitrag zum
+      # beobachteten Zucken. Live-Aktualisierung laeuft jetzt ausschliesslich
+      # ereignisgesteuert (siehe switch:/datetime:-Sektion und Kommentar am Dateianfang).
 
 time:
   # Primaer: Zeit von Home Assistant ueber die bereits bestehende native API-Verbindung
@@ -291,6 +331,11 @@ time:
   - platform: homeassistant
     id: current_time
     timezone: Europe/Berlin
+    # update_interval: 1h -- Zeit-Resync reicht stuendlich, nicht haeufiger (Wunsch des
+    # Nutzers). Die interne Systemuhr laeuft dazwischen ganz normal per Software weiter
+    # (on_time seconds:0 aktualisiert die Anzeige weiterhin jede Minute) -- nur der
+    # tatsaechliche Re-Sync mit Home Assistant/NTP passiert seltener.
+    update_interval: 1h
     on_time_sync:
       then:
         - lambda: "id(time_synced) = true;"
@@ -311,6 +356,7 @@ time:
   - platform: sntp
     id: sntp_time
     timezone: Europe/Berlin
+    update_interval: 1h
     on_time_sync:
       then:
         - lambda: "id(time_synced) = true;"
@@ -430,11 +476,11 @@ script:
                 text: "Wecker inaktiv"
                 text_color: 0x888888
 
-  # NEU (Stufe 27): zieht Hauptschalter-Widget+Label und alle 7 Wochentag-Checkboxen aus
-  # dem aktuellen Entity-Zustand nach -- wird periodisch vom 500ms-Interval aufgerufen,
-  # damit Aenderungen von aussen (z.B. Home Assistant) sofort am Display ankommen, nicht
-  # erst beim naechsten Oeffnen der Einstellungsseite. Bewusst nur Switches/Checkboxen,
-  # keine Roller (siehe Stufe-27-Hinweis oben).
+  # Wird jetzt NUR NOCH beim Oeffnen der Einstellungsseite ("Einst."-Button) aufgerufen
+  # (einmaliger "Pull"), NICHT MEHR periodisch vom 500ms-Interval (siehe Stufe-29-
+  # Hinweis am Dateianfang -- das war die Ursache des Zuckens/Blitzens). Zieht
+  # Hauptschalter-Widget+Label und alle 7 Wochentag-Checkboxen aus dem aktuellen
+  # Entity-Zustand nach.
   - id: live_sync_switches_script
     then:
       - lvgl.widget.update:
@@ -536,8 +582,10 @@ script:
 # WECK-LOGIK: Weckzeit, Wochentage, Hauptschalter (persistent ueber Neustarts)
 #
 # Alles hier ist bewusst ein REINER Wertespeicher (restore_value/restore_mode fuer die
-# Persistenz), OHNE on_value-Handler, der irgendein LVGL-Widget aktualisiert. Siehe
-# Hinweis oben -- das war die bestaetigte Absturzursache.
+# Persistenz). Die on_turn_on/on_turn_off-Handler weiter unten duerfen seit Stufe 29
+# zwar ein LVGL-Widget aktualisieren, aber NUR gated durch `ui_ready` (siehe Kommentar
+# am Dateianfang) -- damit bleibt das urspruengliche, bestaetigte Absturzmuster
+# (Widget-Update waehrend des Boot-Restores, bevor LVGL existiert) ausgeschlossen.
 # ---------------------------------------------------------------------------
 
 globals:
@@ -557,6 +605,25 @@ globals:
     restore_value: false
     initial_value: "false"
   - id: sync_blink_state
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  # STUFE 29: wird 2s nach on_boot auf true gesetzt (siehe esphome.on_boot oben). Gated
+  # die neuen on_turn_on/on_turn_off-Widget-Updates der Schalter weiter unten, damit sie
+  # nicht schon waehrend des Boot-Restores (LVGL existiert da noch nicht) feuern koennen.
+  - id: ui_ready
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  # STUFE 32: waehrend ein Roller SELBST gerade eine Aenderung nach aussen meldet
+  # (on_value -> datetime.time.set: alarm_time_ha), wird dieses Flag kurzzeitig auf
+  # true gesetzt. Verhindert, dass der neue, ereignisgesteuerte Roller-Live-Sync
+  # (siehe datetime:-Sektion) in genau diesem Moment denselben Roller (oder die
+  # anderen beiden) ueberschreibt und so ein aktives Scrollen/Ziehen stoert -- exakt
+  # das Risiko, das in Stufe 27 dazu gefuehrt hat, Roller bewusst von der Live-Sync
+  # auszunehmen. Aenderungen von AUSSEN (z.B. Home Assistant) setzen dieses Flag
+  # nicht, duerfen die Roller also weiterhin live aktualisieren.
+  - id: roller_driven_update
     type: bool
     restore_value: false
     initial_value: "false"
@@ -608,6 +675,30 @@ datetime:
         - number.set:
             id: alarm_minute
             value: !lambda "return x.minute;"
+        # STUFE 32: zieht die Roller live nach, wenn die Weckzeit von AUSSEN (z.B. Home
+        # Assistant) geaendert wurde -- vorher passierte das nur beim erneuten Oeffnen
+        # der Einstellungsseite. `ui_ready` verhindert das bekannte Boot-Absturzmuster,
+        # `roller_driven_update` verhindert, dass ein Roller sich waehrend des eigenen
+        # Scrollens selbst ueberschreibt (siehe globals:-Kommentar).
+        - if:
+            condition:
+              lambda: "return id(ui_ready) && !id(roller_driven_update);"
+            then:
+              - lvgl.roller.update:
+                  id: roller_hour
+                  selected_index: !lambda "return x.hour;"
+              - globals.set:
+                  id: minute_tens
+                  value: !lambda "return x.minute / 10;"
+              - globals.set:
+                  id: minute_ones
+                  value: !lambda "return x.minute % 10;"
+              - lvgl.roller.update:
+                  id: roller_minute_tens
+                  selected_index: !lambda "return id(minute_tens);"
+              - lvgl.roller.update:
+                  id: roller_minute_ones
+                  selected_index: !lambda "return id(minute_ones);"
 
 switch:
   # Steuert, ob die Temperaturzeile bei fehlendem Wert "n/v" anzeigt (aus, Standard)
@@ -629,42 +720,255 @@ switch:
     id: alarm_master_switch
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    # STUFE 29: ereignisgesteuertes Nachziehen des Widgets statt 500ms-Polling (siehe
+    # Kommentar am Dateianfang). `ui_ready`-Gate verhindert das urspruengliche
+    # Absturzmuster waehrend des Boot-Restores.
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_master_switch on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: master_switch_widget
+                  state:
+                    checked: true
+              - script.execute: update_master_switch_label_script
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_master_switch on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: master_switch_widget
+                  state:
+                    checked: false
+              - script.execute: update_master_switch_label_script
 
   - platform: template
     name: "Wecker Montag"
     id: alarm_mon
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_mon on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_mon
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_mon on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_mon
+                  state:
+                    checked: false
   - platform: template
     name: "Wecker Dienstag"
     id: alarm_tue
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_tue on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_tue
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_tue on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_tue
+                  state:
+                    checked: false
   - platform: template
     name: "Wecker Mittwoch"
     id: alarm_wed
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_wed on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_wed
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_wed on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_wed
+                  state:
+                    checked: false
   - platform: template
     name: "Wecker Donnerstag"
     id: alarm_thu
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_thu on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_thu
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_thu on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_thu
+                  state:
+                    checked: false
   - platform: template
     name: "Wecker Freitag"
     id: alarm_fri
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_fri on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_fri
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_fri on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_fri
+                  state:
+                    checked: false
   - platform: template
     name: "Wecker Samstag"
     id: alarm_sat
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_sat on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_sat
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_sat on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_sat
+                  state:
+                    checked: false
   - platform: template
     name: "Wecker Sonntag"
     id: alarm_sun
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_sun on_turn_on gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_sun
+                  state:
+                    checked: true
+    on_turn_off:
+      then:
+        - logger.log:
+            format: "[wecker] alarm_sun on_turn_off gefeuert, ui_ready=%d"
+            args: ["(int) id(ui_ready)"]
+        - if:
+            condition:
+              lambda: "return id(ui_ready);"
+            then:
+              - lvgl.widget.update:
+                  id: checkbox_sun
+                  state:
+                    checked: false
 
 # ---------------------------------------------------------------------------
 # LVGL – Uhrzeit, Einstellungen, Alarm mit grosser Touchflaeche
@@ -817,8 +1121,9 @@ lvgl:
                 - lvgl.roller.update:
                     id: roller_minute_ones
                     selected_index: !lambda "return id(minute_ones);"
-                # Hauptschalter+Checkboxen: seit Stufe 27 uebernimmt das schon
-                # periodisch laufende live_sync_switches_script auch diesen Teil.
+                # Hauptschalter+Checkboxen: seit Stufe 29 ereignisgesteuert (siehe
+                # switch:-Sektion), dieser Pull hier bleibt trotzdem als
+                # Sicherheitsnetz beim Oeffnen der Seite erhalten.
                 - script.execute: live_sync_switches_script
                 - lvgl.page.show: settings_page
 
@@ -979,6 +1284,9 @@ lvgl:
             visible_row_count: 3
             on_value:
               then:
+                - globals.set:
+                    id: roller_driven_update
+                    value: "true"
                 - number.set:
                     id: alarm_hour
                     value: !lambda "return (float) x;"
@@ -987,6 +1295,9 @@ lvgl:
                     time: !lambda |-
                       return {.second = 0, .minute = (int) id(alarm_minute).state,
                           .hour = (int) x};
+                - globals.set:
+                    id: roller_driven_update
+                    value: "false"
 
         - label:
             align: CENTER
@@ -1020,6 +1331,9 @@ lvgl:
             on_value:
               then:
                 - globals.set:
+                    id: roller_driven_update
+                    value: "true"
+                - globals.set:
                     id: minute_tens
                     value: !lambda "return x;"
                 - number.set:
@@ -1030,6 +1344,9 @@ lvgl:
                     time: !lambda |-
                       return {.second = 0, .minute = id(minute_tens) * 10 + id(minute_ones),
                           .hour = (int) id(alarm_hour).state};
+                - globals.set:
+                    id: roller_driven_update
+                    value: "false"
 
         - roller:
             id: roller_minute_ones
@@ -1055,6 +1372,9 @@ lvgl:
             on_value:
               then:
                 - globals.set:
+                    id: roller_driven_update
+                    value: "true"
+                - globals.set:
                     id: minute_ones
                     value: !lambda "return x;"
                 - number.set:
@@ -1065,6 +1385,9 @@ lvgl:
                     time: !lambda |-
                       return {.second = 0, .minute = id(minute_tens) * 10 + id(minute_ones),
                           .hour = (int) id(alarm_hour).state};
+                - globals.set:
+                    id: roller_driven_update
+                    value: "false"
 
         - label:
             align: CENTER

@@ -2,7 +2,7 @@
 # Board: Waveshare ESP32-S3-Touch-LCD-7 (Basisversion, CH422G-IO-Expander)
 # Details/Quellen: siehe Docs/hardware-specs.md und Docs/quellen.md
 #
-# Unterschiede zur CrowPanel-Variante (../Smart-Wecker/):
+# Hardware-Einschraenkungen dieses Boards:
 #   - KEINE Audioausgabe (dieses Board hat keinen Onboard-Verstaerker/Lautsprecheranschluss
 #     und keine sicher verlötbaren freien GPIOs dafuer -- siehe Docs/hardware-specs.md)
 #   - KEIN physischer Taster (kein sicher nutzbarer freier GPIO dafuer) -- stattdessen eine
