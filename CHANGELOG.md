@@ -1,8 +1,10 @@
 # Entwicklungsverlauf
 
-Chronologische Zusammenfassung aller nummerierten Zwischenstufen. Stufen 01–13 sind
-eine systematische Bisektion eines Boot-Absturzes; ab Stufe 14 sind es reine
-Feature-Iterationen auf dem dabei gefundenen, sicheren Muster.
+Chronologische Zusammenfassung aller nummerierten Zwischenstufen (01–27). Stufen
+01–13 sind eine systematische Bisektion eines Boot-Absturzes; ab Stufe 14 sind es
+reine Feature-Iterationen auf dem dabei gefundenen, sicheren Muster. Mit Stufe 27
+endet die nummerierte Dateikonvention für diesen Funktionsstrang -- der
+zusammengeführte Endstand heißt `Smart-Wecker-Waveshare_MQTT.yaml` (siehe unten).
 
 ## Phase 1: Absturz-Bisektion (01–13)
 
@@ -49,16 +51,19 @@ volle technische Erklärung.
 | 24 | Zeit wird primär von Home Assistant abgefragt (native API), NTP als Fallback |
 | 25 | Außen-/Zimmertemperatur oben in der Kopfzeile, per MQTT, Quelle frei aus Home Assistant wählbar (siehe README) |
 | 26 | Temperaturzeile links statt zentriert ausgerichtet |
+| 27 | Bugfix: Hauptschalter-Label und Wochentag-Checkboxen zeigten eine Fernänderung (z.B. über ein HA-Dashboard) erst nach erneutem Öffnen der Einstellungsseite an — jetzt periodisch (alle 500ms) live nachgezogen |
 
-`smart-wecker-waveshare.yaml` (ohne Nummer) entspricht dem zuletzt bestätigten
-Stand (Stufe 23). Die Stufen 24–26 (HA-Zeitquelle, MQTT-Temperaturanzeige,
-Links-Ausrichtung) sind bereits gebaut, aber am Gerät noch nicht abschließend
-bestätigt — nach erfolgreichem Test werden sie ebenfalls in die Hauptdatei
-übernommen.
+`smart-wecker-waveshare-24.yaml` bleibt als zuletzt vollständig bestätigter,
+stabiler Meilenstein (noch ohne Temperaturanzeige) im Repo erhalten.
 
-Die Zwischendateien der Stufen 01–23 und 25 wurden aus dem Repo entfernt, um es
-übersichtlich zu halten, nachdem ihr Inhalt hier zusammengefasst und in
+Die Stufen 25–27 (MQTT-Temperaturanzeige, Links-Ausrichtung, Live-Sync-Bugfix)
+wurden zusammengeführt und liegen als **`Smart-Wecker-Waveshare_MQTT.yaml`** vor —
+das ist der aktuelle, empfohlene Stand. Die numerierte Zwischenstufen-Datei-Konvention
+wird für diesen Funktionsstrang damit durch einen benannten, feststehenden Dateinamen
+abgelöst; neue Experimente/Zwischenstufen landen ab jetzt im lokalen, nicht
+committeten Ordner `Entwuerfe/` statt als weitere nummerierte Dateien im Repo.
+
+Die Zwischendateien der Stufen 01–23, 25, 26 und 27 wurden aus dem Repo entfernt, um
+es übersichtlich zu halten, nachdem ihr Inhalt hier zusammengefasst und in
 [Docs/ESPHome-Lessons-Learned.md](Docs/ESPHome-Lessons-Learned.md) dokumentiert
-wurde (vollständig weiterhin in der Git-Historie enthalten). Stufe 24 und 26
-liegen noch als Dateien vor, da sie den aktuell wartenden, noch zu bestätigenden
-Stand markieren.
+wurde (vollständig weiterhin in der Git-Historie enthalten).

@@ -6,3 +6,9 @@
 
 # Stray clipboard screenshot (shows device MAC/router info, not documentation)
 /Clipboard_*.png
+/Clipboard.png
+
+# Lokale Entwuerfe/Testversionen (Zwischenstufen, Experimente) -- bewusst NICHT Teil
+# des Repos, siehe README. Bleiben lokal fuer die eigene Referenz erhalten, ohne das
+# Repo bei jedem Zwischenschritt aufzuraeumen.
+/Entwuerfe/

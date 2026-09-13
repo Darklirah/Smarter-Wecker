@@ -90,8 +90,8 @@ MQTT-Passwort: "dein-mqtt-passwort"
 ### 2. Kompilieren & Flashen
 
 Über die ESPHome-Oberfläche (z.B. das ESPHome-Add-on in Home Assistant, oder die
-`esphome`-CLI): `smart-wecker-waveshare-26.yaml` auswählen (aktuellster Stand, inkl.
-Temperaturanzeige — siehe [Unterschied zu -24 unten](#dateien-in-diesem-projekt)),
+`esphome`-CLI): `Smart-Wecker-Waveshare_MQTT.yaml` auswählen (aktueller, empfohlener
+Stand inkl. Temperaturanzeige — siehe [Dateien unten](#dateien-in-diesem-projekt)),
 kompilieren, per USB oder OTA flashen. Falls dabei Probleme auftreten, ist
 `smart-wecker-waveshare-24.yaml` der zuletzt vollständig bestätigte, stabile
 Stand ohne Temperaturanzeige.
@@ -147,23 +147,27 @@ zurückgeschrieben.
 Weitere, beim Ausbau der Funktionen entdeckte ESPHome-Fallstricke (Schriftart-Glyphen,
 `on_boot`-Prioritäten, verzögertes Flash-Schreiben von persistenten Werten) sind in
 [Docs/ESPHome-Lessons-Learned.md](Docs/ESPHome-Lessons-Learned.md) dokumentiert.
-Ein stufenweiser Verlauf aller 26 Entwicklungsschritte steht in
+Ein stufenweiser Verlauf aller Entwicklungsschritte steht in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Dateien in diesem Projekt
 
+- `Smart-Wecker-Waveshare_MQTT.yaml` — **aktueller, empfohlener Stand**: alles aus
+  `-24.yaml` (siehe unten) PLUS die Außen-/Zimmertemperatur-Zeile (per MQTT, Quelle
+  frei aus Home Assistant wählbar, siehe
+  [Temperaturanzeige einrichten](#4-home-assistant-helfer-für-die-temperaturanzeige-anlegen)),
+  links ausgerichtet, mit einem Schalter zum Ausblenden bei fehlendem Wert, sowie dem
+  Bugfix, dass ferngesteuerte Änderungen (z.B. über ein HA-Dashboard) am Hauptschalter
+  und den Wochentag-Checkboxen jetzt live am Display ankommen statt erst beim nächsten
+  Öffnen der Einstellungsseite.
 - `smart-wecker-waveshare-24.yaml` — zuletzt **vollständig bestätigter, stabiler**
-  Stand: Zeitsynchronisation primär über Home Assistant (NTP als Fallback), aber
-  noch **ohne** Temperaturanzeige.
-- `smart-wecker-waveshare-26.yaml` — baut auf `-24.yaml` auf und ergänzt die
-  Außen-/Zimmertemperatur-Zeile (per MQTT, Quelle frei aus Home Assistant wählbar,
-  siehe [Temperaturanzeige einrichten](#4-home-assistant-helfer-für-die-temperaturanzeige-anlegen)),
-  links ausgerichtet, mit einem Schalter zum Ausblenden bei fehlendem Wert. Dies
-  ist der aktuell fortgeschrittenste Stand, aber am Gerät noch nicht abschließend
-  bestätigt (siehe oben, "Kompilieren & Flashen").
-  Die Zwischendateien der Stufen 01–23 und 25 wurden nach Abschluss der jeweiligen
-  Schritte wieder entfernt, um das Repo übersichtlich zu halten — ihr Inhalt ist im
+  Meilenstein-Stand: Zeitsynchronisation primär über Home Assistant (NTP als
+  Fallback), aber noch **ohne** Temperaturanzeige. Als Rückfalloption aufgehoben.
+  Die Zwischendateien aller anderen Entwicklungsschritte wurden nach Abschluss wieder
+  entfernt, um das Repo übersichtlich zu halten — ihr Inhalt ist im
   [CHANGELOG.md](CHANGELOG.md) zusammengefasst und in der Git-Historie enthalten.
+  Neue Experimente/Zwischenstufen landen ab jetzt im lokalen, nicht committeten Ordner
+  `Entwuerfe/` (siehe `.gitignore`).
 - `BILDER/` — Fotos des laufenden Geräts
 - `Docs/hardware-specs.md` — recherchierte Hardware-Spezifikationen mit Quellen
 - `Docs/quellen.md` — Liste aller verwendeten Quellen

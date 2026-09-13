@@ -65,19 +65,35 @@
 # bestehende native API-Verbindung), NTP bleibt als unabhaengige zweite Zeitquelle/
 # Fallback bestehen.
 #
-# STUFE 25 (baut darauf auf): Kosmetik -- oberste Zeile zeigt Aussen-/Zimmertemperatur.
-# Die Werte kommen per MQTT (Topics "smartwecker/aussentemperatur" /
-# ".../zimmertemperatur"), veroeffentlicht von einer HA-Automatisierung, die den in
-# zwei input_text-Helfern ("Wecker Aussentemperatur-Quelle" / "...Zimmertemperatur-
-# Quelle") frei eingetragenen Entity-Namen jede Minute (und sofort bei Aenderung des
-# Helfers) ausliest und per mqtt.publish (retained) weiterreicht -- Quelle also komplett
-# aus Home Assistant heraus wählbar, ohne den ESP32 neu zu flashen.
-# Ein Schalter in HA ("Wecker Temperaturzeile ausblenden falls leer") steuert, ob bei
-# fehlendem Wert "n/v" angezeigt oder die ganze Zeile ausgeblendet wird.
+# Kosmetik: oberste Zeile zeigt Aussen-/Zimmertemperatur. Die Werte kommen per MQTT
+# (Topics "smartwecker/aussentemperatur" / ".../zimmertemperatur"), veroeffentlicht von
+# einer HA-Automatisierung, die den in zwei input_text-Helfern ("Wecker
+# Aussentemperatur-Quelle" / "...Zimmertemperatur-Quelle") frei eingetragenen
+# Entity-Namen jede Minute (und sofort bei Aenderung des Helfers) ausliest und per
+# mqtt.publish (retained) weiterreicht -- Quelle also komplett aus Home Assistant
+# heraus wählbar, ohne den ESP32 neu zu flashen. Ein Schalter in HA ("Wecker
+# Temperaturzeile ausblenden falls leer") steuert, ob bei fehlendem Wert "n/v"
+# angezeigt oder die ganze Zeile ausgeblendet wird.
+#
+# Bugfix: "Wecker aktiv/inaktiv"-Label UND die Wochentag-Checkboxen zeigten eine per
+# Home Assistant (z.B. ueber das Dashboard) ferngesteuerte Aenderung erst nach
+# erneutem Verlassen+Oeffnen der Einstellungsseite an -- der bisherige "pull" passierte
+# NUR beim Klick auf "Einst.". Fix: der schon vorhandene 500ms-Interval (bisher nur
+# fuer das Sync-Blinken genutzt) ruft jetzt zusaetzlich, UNBEDINGT (nicht nur waehrend
+# der Zeit-Synchronisation), ein Script auf, das Hauptschalter-Widget+Label und alle
+# 7 Checkboxen aus dem aktuellen Entity-Zustand nachzieht. Bewusst NICHT fuer die Roller
+# gemacht (Weckzeit/Stunde/Minute) -- dort koennte ein periodisches Ueberschreiben waehrend
+# des Scrollens mit der Nutzer-Interaktion kollidieren; Switches/Checkboxen haben dieses
+# Rueckkopplungsrisiko nicht (kein Drag-Zustand), ein periodisches lvgl.widget.update mit
+# gleichem Wert loest hoechstens einen einmaligen, folgenlosen No-Op-Durchlauf durch den
+# jeweiligen on_value-Handler aus (setzt dieselbe Entity nochmal auf denselben Wert).
+#
+# Diese Datei ersetzt die bisherigen nummerierten Zwischenstufen -26/-27 als aktueller,
+# empfohlener Stand (inkl. MQTT-Temperaturanzeige) -- siehe CHANGELOG.md.
 
 esphome:
-  name: smart-wecker-waveshare-26
-  friendly_name: Smart-Wecker Waveshare Test 26
+  name: smart-wecker-waveshare
+  friendly_name: Smart-Wecker-Waveshare
   platformio_options:
     board_upload.maximum_ram_size: 524288
   on_boot:
@@ -127,7 +143,7 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   ap:
-    ssid: "Waveshare-Test-26 Fallback"
+    ssid: "Smart-Wecker-Waveshare Fallback"
 
 api:
   encryption:
@@ -262,6 +278,11 @@ interval:
                   - lvgl.widget.show: sync_status_label
                 else:
                   - lvgl.widget.hide: sync_status_label
+      # NEU (Stufe 27): unbedingt (nicht nur waehrend der Zeit-Synchronisation) bei
+      # jedem Tick den Hauptschalter+Checkboxen aus dem aktuellen Entity-Zustand
+      # nachziehen, damit eine Fernsteuerung (z.B. ueber Home Assistant) sofort am
+      # Display sichtbar wird, statt erst nach erneutem Oeffnen der Einstellungsseite.
+      - script.execute: live_sync_switches_script
 
 time:
   # Primaer: Zeit von Home Assistant ueber die bereits bestehende native API-Verbindung
@@ -408,6 +429,47 @@ script:
                 id: master_switch_label
                 text: "Wecker inaktiv"
                 text_color: 0x888888
+
+  # NEU (Stufe 27): zieht Hauptschalter-Widget+Label und alle 7 Wochentag-Checkboxen aus
+  # dem aktuellen Entity-Zustand nach -- wird periodisch vom 500ms-Interval aufgerufen,
+  # damit Aenderungen von aussen (z.B. Home Assistant) sofort am Display ankommen, nicht
+  # erst beim naechsten Oeffnen der Einstellungsseite. Bewusst nur Switches/Checkboxen,
+  # keine Roller (siehe Stufe-27-Hinweis oben).
+  - id: live_sync_switches_script
+    then:
+      - lvgl.widget.update:
+          id: master_switch_widget
+          state:
+            checked: !lambda "return id(alarm_master_switch).state;"
+      - script.execute: update_master_switch_label_script
+      - lvgl.widget.update:
+          id: checkbox_mon
+          state:
+            checked: !lambda "return id(alarm_mon).state;"
+      - lvgl.widget.update:
+          id: checkbox_tue
+          state:
+            checked: !lambda "return id(alarm_tue).state;"
+      - lvgl.widget.update:
+          id: checkbox_wed
+          state:
+            checked: !lambda "return id(alarm_wed).state;"
+      - lvgl.widget.update:
+          id: checkbox_thu
+          state:
+            checked: !lambda "return id(alarm_thu).state;"
+      - lvgl.widget.update:
+          id: checkbox_fri
+          state:
+            checked: !lambda "return id(alarm_fri).state;"
+      - lvgl.widget.update:
+          id: checkbox_sat
+          state:
+            checked: !lambda "return id(alarm_sat).state;"
+      - lvgl.widget.update:
+          id: checkbox_sun
+          state:
+            checked: !lambda "return id(alarm_sun).state;"
 
   - id: alarm_check_script
     then:
@@ -755,39 +817,9 @@ lvgl:
                 - lvgl.roller.update:
                     id: roller_minute_ones
                     selected_index: !lambda "return id(minute_ones);"
-                - lvgl.widget.update:
-                    id: master_switch_widget
-                    state:
-                      checked: !lambda "return id(alarm_master_switch).state;"
-                - script.execute: update_master_switch_label_script
-                - lvgl.widget.update:
-                    id: checkbox_mon
-                    state:
-                      checked: !lambda "return id(alarm_mon).state;"
-                - lvgl.widget.update:
-                    id: checkbox_tue
-                    state:
-                      checked: !lambda "return id(alarm_tue).state;"
-                - lvgl.widget.update:
-                    id: checkbox_wed
-                    state:
-                      checked: !lambda "return id(alarm_wed).state;"
-                - lvgl.widget.update:
-                    id: checkbox_thu
-                    state:
-                      checked: !lambda "return id(alarm_thu).state;"
-                - lvgl.widget.update:
-                    id: checkbox_fri
-                    state:
-                      checked: !lambda "return id(alarm_fri).state;"
-                - lvgl.widget.update:
-                    id: checkbox_sat
-                    state:
-                      checked: !lambda "return id(alarm_sat).state;"
-                - lvgl.widget.update:
-                    id: checkbox_sun
-                    state:
-                      checked: !lambda "return id(alarm_sun).state;"
+                # Hauptschalter+Checkboxen: seit Stufe 27 uebernimmt das schon
+                # periodisch laufende live_sync_switches_script auch diesen Teil.
+                - script.execute: live_sync_switches_script
                 - lvgl.page.show: settings_page
 
     - id: settings_page
