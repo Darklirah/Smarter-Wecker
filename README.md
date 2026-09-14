@@ -37,6 +37,7 @@ Fotos des laufenden Geräts im Ordner [BILDER/](BILDER/): Uhrzeit-Seite, Einstel
 | Audio | Keins — kein Onboard-Verstärker/Lautsprecheranschluss, keine sicher nutzbaren freien GPIOs dafür |
 | Physischer Taster | Keiner — dafür zwei große Touchflächen (260×260px) auf der Alarm-Seite |
 | Funk | Wi-Fi 2.4 GHz, Bluetooth 5 (LE, ungenutzt) |
+| Stromversorgung | **5V / mindestens 2A, siehe Warnung unten** — mit einem schwächeren Netzteil flackert das Display |
 
 Ausführliche Pinbelegung, Quellen und Recherche-Details: [Docs/hardware-specs.md](Docs/hardware-specs.md),
 [Docs/quellen.md](Docs/quellen.md).
@@ -150,22 +151,41 @@ Weitere, beim Ausbau der Funktionen entdeckte ESPHome-Fallstricke (Schriftart-Gl
 Ein stufenweiser Verlauf aller Entwicklungsschritte steht in
 [CHANGELOG.md](CHANGELOG.md).
 
+## ⚠️ Stromversorgung: ein ausreichend starkes 5V-Netzteil ist Pflicht
+
+**Das Board braucht ein 5V-Netzteil mit mindestens 2A.** Ein schwächeres Netzteil
+(oder ein normaler USB-Port am PC/Hub) zeigt sich nicht als Absturz, sondern als
+**unregelmäßiges kurzes Zucken/Blitzen des Bildschirms** — ein Fehlerbild, das sehr
+nach einem Software- oder Timing-Problem aussieht.
+
+Genau das hat bei diesem Projekt eine ausgedehnte Fehlersuche in die falsche Richtung
+gelenkt (siehe [CHANGELOG.md](CHANGELOG.md), Phase 3). Reihenweise Software-Ursachen
+wurden untersucht und wieder ausgeschlossen:
+
+- periodisches Nachziehen von Schalter-Widgets (daraufhin auf rein ereignisgesteuerte
+  Updates umgebaut — an sich sinnvoll, aber nicht die Ursache),
+- die Bildwiederholrate des Displays (`update_interval`, 1s bis 30s getestet, kein Effekt),
+- der WLAN-Energiesparmodus (`power_save_mode: none`, kein eindeutiger Effekt),
+- der Pixeltakt `pclk_frequency` (von 16MHz auf 14MHz gesenkt — schien zu helfen, war
+  aber offenbar kein echter Effekt),
+- vermutete PSRAM-Bandbreiten-Konkurrenz zwischen RGB-Display-DMA und CPU.
+
+**Die tatsächliche Lösung war ein Netzteilwechsel:** mit einem Raspberry-Pi-Netzteil
+(5V / 2A) ist das Flackern vollständig verschwunden. Wer dieses Board nachbaut und
+Flackern sieht, sollte deshalb **zuerst das Netzteil tauschen**, bevor er anfängt, in
+der YAML-Konfiguration zu suchen.
+
+Anmerkung zu `pclk_frequency`: der Wert steht in der Konfiguration weiterhin auf
+`14MHZ` statt auf dem Hardware-Referenzwert `16MHZ`. Das ist jetzt nicht mehr nötig und
+kostet etwas Bildwiederholrate (~34Hz statt ~39Hz) — bei stabiler Stromversorgung kann
+er wieder auf `16MHZ` gestellt werden. Falls doch jemals ein niedrigerer Takt getestet
+wird: **nicht unter 14MHz gehen** — sowohl 10MHz als auch 8,2MHz haben bei diesem Panel
+zu komplettem Synchronisationsverlust geführt (wechselnde Farbflächen statt normaler
+Anzeige), das Panel hat also kaum Spielraum nach unten.
+
 ## Offene Probleme
 
-- **Gelegentliches, kurzes Bildschirm-Zucken/Blitzen**: Tritt unregelmäßig auf, ist
-  aber nach einer ausführlichen Fehlersuche (siehe CHANGELOG.md, Phase 3) deutlich
-  seltener geworden. Ausgeschlossen wurden: periodisches Nachziehen von
-  Schalter-Widgets (jetzt komplett ereignisgesteuert), die Bildwiederholrate des
-  Displays (`update_interval`, 1s bis 30s getestet, kein Effekt), WLAN-Energiesparmodus
-  (deaktiviert, kein eindeutiger Effekt). Vermutete Ursache: kurzzeitige
-  PSRAM-Bandbreiten-Konkurrenz zwischen dem RGB-Display-DMA und anderen Komponenten —
-  ein bekanntes Muster bei ESP32-S3-Boards mit parallelem RGB-Display und Framebuffer
-  im PSRAM. Der Pixeltakt (`pclk_frequency`) wurde deswegen von 16MHz auf 14MHz
-  gesenkt, was die Häufigkeit deutlich reduziert hat — **das Panel verträgt aber keinen
-  wesentlich niedrigeren Takt**: sowohl 10MHz als auch 8,2MHz haben zu einem
-  kompletten Synchronisationsverlust geführt (wechselnde Farbflächen statt normaler
-  Anzeige). Das Zucken gilt damit als deutlich gemildert, aber nicht mit Sicherheit
-  vollständig behoben.
+Aktuell keine bekannten.
 
 ## Dateien in diesem Projekt
 
