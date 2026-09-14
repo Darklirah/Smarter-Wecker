@@ -187,6 +187,11 @@ Anzeige), das Panel hat also kaum Spielraum nach unten.
 
 Aktuell keine bekannten.
 
+Das kurze Reißen des Bildes beim Umschalten auf die Einstellungsseite ist kein Fehler,
+sondern eine Eigenschaft dieser Panel-Bauart — die Erklärung dazu steht am Ende dieser
+Datei unter
+[Warum das Bild beim Seitenwechsel kurz „zuckt" (Tearing)](#warum-das-bild-beim-seitenwechsel-kurz-zuckt-tearing).
+
 ## Dateien in diesem Projekt
 
 - `Smart-Wecker-Waveshare_MQTT.yaml` — **aktueller, empfohlener Stand**: alles aus
@@ -213,3 +218,65 @@ Aktuell keine bekannten.
 - `Docs/Waveshare_Swirch_verifiziert.yaml` — Kopie der verifizierten Hardware-Referenz
 - `Docs/ESPHome-Lessons-Learned.md` — projektübergreifende ESPHome-Lektionen
 - `secrets.yaml` — deine lokalen Zugangsdaten (nicht Teil des Repos, siehe oben)
+
+## Warum das Bild beim Seitenwechsel kurz „zuckt" (Tearing)
+
+Wenn man auf die Einstellungstaste tippt, sieht man manchmal für den Bruchteil einer
+Sekunde eine Reißkante im Bild. **Das ist kein Fehler dieser Konfiguration, sondern
+eine Eigenschaft der Hardware bzw. des ESPHome-Treibers** — und es ist ein anderes
+Phänomen als das weiter oben beschriebene Netzteil-Flackern.
+
+**Ursache.** Ein paralleles RGB-Panel hat keinen eigenen Bildspeicher. Der ESP32-S3
+schiebt den Bildinhalt per DMA fortlaufend aus einem Framebuffer im PSRAM zum Panel
+hinaus — bei 14MHz Pixeltakt etwa 34-mal pro Sekunde, also alle ~29ms einmal komplett
+von oben nach unten. Im ESPHome-Treiber `mipi_rgb` ist dabei fest verdrahtet:
+
+- `config.num_fbs = 1` — es gibt **genau einen** Framebuffer, kein Double Buffering.
+- `write_to_display_()` ruft `esp_lcd_panel_draw_bitmap()` **sofort** auf, sobald LVGL
+  etwas neu gezeichnet hat. Eine Synchronisation auf den Bildanfang (VSYNC) findet
+  nicht statt; eine `on_vsync`-Callback-Registrierung
+  (`esp_lcd_rgb_panel_register_event_callbacks`) kommt im Treiber überhaupt nicht vor.
+
+LVGL schreibt also mitten in genau das Bild hinein, das gerade zur Anzeige
+hinausgeschoben wird. Ist der Wechsel auf die Einstellungsseite halb fertig, während
+der Bildstrahl schon in der Bildmitte steht, sieht man oben die neue und unten noch die
+alte Seite — die sichtbare Reißkante. Bei einem Seitenwechsel wird das gesamte Bild
+(800×480) auf einen Schlag neu aufgebaut, deshalb fällt es genau dort am meisten auf.
+
+**Was nicht die Ursache ist:** eine Umschaltanimation. Der Seitenwechsel läuft bereits
+ohne (`LV_SCR_LOAD_ANIM_NONE`), ist also ein einziger Neuaufbau und nicht viele
+hintereinander. Über die YAML-Konfiguration ist an dieser Stelle nichts zu holen.
+
+**Warum es hier nicht behoben wurde.** Technisch ginge es, aber nur mit einer
+gepatchten Kopie der `mipi_rgb`-Komponente als lokale `external_components` — mit der
+Folge, dass man den Patch bei jedem ESPHome-Update nachpflegen muss. Zwei Ansätze
+wären denkbar:
+
+1. **Auf VSYNC warten, dann kopieren** (~20 Zeilen): `on_vsync`-Callback registrieren,
+   der ein Semaphor freigibt, und in `write_to_display_` vor dem Kopieren darauf
+   warten. Kein zusätzlicher Speicherbedarf, kostet bis zu ~29ms Latenz pro
+   Aktualisierung. Das ist allerdings ein Wettrennen mit dem Bildstrahl und keine
+   Garantie: 768 KB in den PSRAM zu kopieren dauert einen erheblichen Teil eines
+   Frames. Für kleine Aktualisierungen (Uhrzeit-Ziffern) wäre es eine echte Lösung,
+   ausgerechnet für den Vollbild-Seitenwechsel eher nicht.
+2. **Echtes Double Buffering** (`num_fbs = 2`, 2 × 768 KB PSRAM von 8 MB verfügbar):
+   konstruktionsbedingt reißfrei. Haken: mit zwei Framebuffern schreibt
+   `esp_lcd_panel_draw_bitmap` in den hinteren Puffer und tauscht, hält die beiden aber
+   **nicht** synchron. Teilaktualisierungen würden zwischen zwei Bildständen
+   hin- und herspringen, solange LVGL nicht jedes Mal das ganze Bild neu zeichnet
+   (`full_refresh = 1`) — das setzt die ESPHome-LVGL-Komponente nicht. Man müsste also
+   **zwei** Komponenten patchen.
+
+Ein einzelner Riss bei einem bewusst ausgelösten Seitenwechsel ist für ein RGB-Panel
+mit einem Framebuffer schlicht normal. Der Aufwand und das Risiko der beiden Patches
+standen dafür nicht im Verhältnis.
+
+**Kleine, kostenlose Milderung:** `pclk_frequency` auf dem Hardware-Referenzwert
+`16MHZ` belassen. Das verkürzt einen Bildaufbau von ~29ms auf ~25,6ms, das Zeitfenster
+für einen Riss wird entsprechend kleiner.
+
+**Am Rande, für spätere Fehlersuche:** ESPHome ruft in `MipiRgb::loop()` bei *jedem*
+Durchlauf `esp_lcd_rgb_panel_restart()` auf — eine eingebaute Selbstheilung gegen
+dauerhaft verrutschte Bilder. Wer deshalb auf die Idee kommt, zusätzlich die
+IDF-Option `CONFIG_LCD_RGB_RESTART_IN_VSYNC` zu setzen, sollte das vorher genau prüfen:
+die beiden Mechanismen greifen sich vermutlich gegenseitig ins Lenkrad.
